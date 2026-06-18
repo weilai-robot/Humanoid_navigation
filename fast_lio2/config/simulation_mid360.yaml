@@ -1,0 +1,48 @@
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 3
+        max_iteration: 3
+        filter_size_surf: 0.5   ## 0.5
+        filter_size_map: 0.5   ## 0.5
+        cube_side_length: 30.0
+        runtime_pos_log_enable: false
+        map_file_path: "./test.pcd"
+
+        common:
+            lid_topic:  "/livox/lidar"    # [修改] 对应你 Week 1 的仿真话题 "/livox/lidar" 
+            imu_topic:  "/imu/data"       # [修改] 对应你 Week 1 的仿真话题 (原文件是 /livox/imu)
+            time_sync_en: false           # 仿真时间本身就是同步的，设为 false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 1                 #  普通3D雷达用2。
+            scan_line: 4                  # 4 仿真可以设低一点，Mid-360仿真插件通常兼容性较好
+            scan_rate: 10                 # 10Hz
+            timestamp_unit: 2             # 1 [修改] ROS2 仿真通常用 2 (ROS Header Time)
+            blind: 0.5                    # 0.5 盲区过滤
+
+        mapping:
+            acc_cov: 0.01   ## 0.1
+            gyr_cov: 0.01   ## 0.1
+            b_acc_cov: 0.001  # 0.0001
+            b_gyr_cov: 0.001  # 0.0001
+            fov_degree: 360.0
+            det_range: 10.0
+            extrinsic_est_en: false       # false [⚠️重点修改] 仿真里安装位置是完美的，必须关闭在线估计，否则会漂移。
+            extrinsic_T: [ 0.0, 0.0, 0.0 ] # [修改] 假设 URDF 里雷达和 IMU 坐标系重合
+            extrinsic_R: [ 1.0, 0.0, 0.0,
+                           0.0, -1.0, 0.0,
+                           0.0, 0.0, -1.0 ]
+
+        publish:
+            path_en: true                 # 发布路径
+            effect_map_en: false          # 不发布特效地图 (节省性能)
+            map_en: true                  # 发布点云地图 (白色那个)
+            scan_publish_en: true         # 发布当前扫描 (红色那个)
+            dense_publish_en: true        # [建议] 改为 true，让 Rviz 里的地图更稠密好看
+            scan_bodyframe_pub_en: true   # 发布相对于机身的点云
+
+        pcd_save:
+            pcd_save_en: true            # [建议] 调试阶段先关掉，避免每次运行都生成大文件
+            interval: -1

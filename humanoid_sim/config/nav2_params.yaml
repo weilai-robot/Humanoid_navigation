@@ -1,0 +1,288 @@
+amcl:
+  ros__parameters:
+    use_sim_time: True
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    base_frame_id: "base_footprint"
+    global_frame_id: "map"
+    odom_frame_id: "odom"
+    scan_topic: "/sim/lidar"
+    robot_model_type: "nav2_amcl::DifferentialMotionModel"
+    tf_broadcast: true
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugins: ["progress_checker"]          # ← 加这个（Humble+ 推荐写法）
+    goal_checker_plugins: ["general_goal_checker"]          # ← 逻辑名
+    controller_plugins: ["FollowPath"]
+    
+    # Progress checker（必须定义）
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.15               # 可调
+      movement_time_allowance: 20.0               # 可调
+    
+    # Goal checker（必须定义）
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.35
+      yaw_goal_tolerance: 0.35
+      stateful: True                              # 推荐加这个，防止反复触发 goal reached
+    
+    # FollowPath:
+    #   plugin: "dwb_core::DWBLocalPlanner"
+    #   debug_trajectory_details: True
+
+    #   # 必须添加这个 critics 列表（至少包含这些常用 critic）
+    #   critics: [
+    #     "RotateToGoal",
+    #     "Oscillation",
+    #     "BaseObstacle",
+    #     "GoalAlign",
+    #     "PathAlign",
+    #     "PathDist",
+    #     "GoalDist"
+    #   ]
+
+    #   # 每个 critic 的权重（scale），建议从这些默认值开始调
+    #   BaseObstacle.scale: 0.02
+    #   PathAlign.scale: 32.0
+    #   PathAlign.forward_point_distance: 0.1
+    #   GoalAlign.scale: 24.0
+    #   GoalAlign.forward_point_distance: 0.1
+    #   PathDist.scale: 32.0
+    #   GoalDist.scale: 24.0
+    #   RotateToGoal.scale: 32.0
+    #   RotateToGoal.slowing_factor: 5.0   # 可选，接近目标时减速
+    #   RotateToGoal.lookahead_time: -1.0  # -1 表示禁用 lookahead
+
+    #   # 其他你原来的参数保持不变
+    #   min_vel_x: 0.0
+    #   min_vel_y: 0.0
+    #   max_vel_x: 0.5
+    #   max_vel_theta: 1.0
+    #   min_speed_xy: 0.0
+    #   max_speed_xy: 0.5
+    #   min_speed_theta: 0.0
+    #   xy_goal_tolerance: 0.25
+    #   yaw_goal_tolerance: 0.25
+    #   transform_tolerance: 0.2
+
+    #   # 可选：加速/减速限制（让运动更平滑，人形机器人建议加）
+    #   acc_lim_x: 2.5
+    #   acc_lim_theta: 3.2
+    #   decel_lim_x: -2.5
+    #   decel_lim_theta: -3.2
+
+    #   # 轨迹采样（影响计算量和精度，人形底盘建议稍密一点）
+    #   vx_samples: 20
+    #   vtheta_samples: 40
+    #   sim_time: 1.5           # 预测时间，1.0~2.0 常见
+    #   linear_granularity: 0.05
+    #   angular_granularity: 0.025
+
+    # 👇👇👇 MPPI 配置开始 👇👇👇
+    FollowPath:
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 32
+      model_dt: 0.05
+      batch_size: 1000
+      vx_std: 0.2
+      vy_std: 0.2
+      wz_std: 0.4
+      vx_max: 0.8
+      vx_min: -0.35
+      vy_max: 0.0
+      wz_max: 1.9
+      iteration_count: 1
+      prune_distance: 1.7
+      transform_tolerance: 0.1
+      temperature: 0.5
+      gamma: 0.015
+      motion_model: "DiffDrive"  # 仿真里近似差速，或者用 "Omni" 如果你是全向移动
+
+    #   # 可选：加速/减速限制（让运动更平滑，人形机器人建议加）
+      acc_lim_x: 2.5
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
+      decel_lim_theta: -3.2
+
+      visualize: true
+      # 评分标准 (Critics)
+      critics: ["GoalCritic", "PathAlignCritic", "PathFollowCritic", "ConstraintCritic", "PreferForwardCritic", "CostCritic"]  #  , "ObstacleCritic"
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      ObstacleCritic:
+        enabled: true
+        cost_power: 1
+        repulsion_weight: 1.5
+        critical_weight: 20.0
+        consider_footprint: false   # ← 明确 false，用点检查而非 footprint
+        cost_weight: 4.0
+        collision_cost: 10000.0
+        near_goal_distance: 0.5
+      GoalCritic:
+        enabled: true
+        cost_weight: 5.0
+        cost_power: 1
+        threshold_to_consider: 1.4
+      PathAlignCritic:
+        enabled: true
+        cost_weight: 14.0
+        cost_power: 1
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_weight: 5.0
+        cost_power: 1
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PreferForwardCritic:
+        enabled: true
+        cost_weight: 8.0
+        cost_power: 1
+        threshold_to_consider: 0.5
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0               # 从你的 Obstacle cost_weight 4.0 开始调
+        critical_cost: 300.0           # 临界成本阈值（高于此视为严重碰撞）
+        collision_cost: 1000000.0      # 碰撞惩罚（极大值）
+        consider_footprint: false      # 人形建议开启（用 footprint 检查）
+        near_goal_distance: 0.5
+
+# local_costmap:
+#   local_costmap:
+#     ros__parameters:
+#       update_frequency: 5.0
+#       publish_frequency: 2.0
+#       global_frame: odom
+#       robot_base_frame: base_footprint
+#       use_sim_time: True
+#       rolling_window: true
+#       width: 3
+#       height: 3
+#       resolution: 0.05
+#       robot_radius: 0.2
+#       inflation_layer:
+#         cost_scaling_factor: 3.0
+#         inflation_radius: 0.55
+#       observation_sources: scan
+#       scan:
+#         topic: /sim/lidar
+#         max_obstacle_height: 2.0
+#         clearing: True
+#         marking: True
+#         data_type: "LaserScan"
+#         raytrace_max_range: 3.0
+#         raytrace_min_range: 0.0
+#         obstacle_max_range: 2.5
+#         obstacle_min_range: 0.0
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 10.0  # 提高一点频率，让避障更灵敏
+      publish_frequency: 5.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      use_sim_time: True
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.05
+      robot_radius: 0.2
+      
+      # 👇👇👇 关键修复：显式声明要加载哪些图层 👇👇👇
+      plugins: ["obstacle_layer", "inflation_layer"]
+
+      # 👇 障碍物层 (必须定义 plugin 类型)
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /sim/lidar
+          max_obstacle_height: 2.0
+          min_obstacle_height: -0.1
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+
+      # 👇 膨胀层 (必须定义 plugin 类型)
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 10.0  # 3.0 增大，让膨胀更陡峭，减少查询歧义
+        inflation_radius: 0.6  # 0.55  稍大于 robot_radius + 安全裕度
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      use_sim_time: True
+      robot_radius: 0.2
+      resolution: 0.05
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /sim/lidar
+          max_obstacle_height: 2.0
+          min_obstacle_height: -0.1
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+      static_layer:
+        map_subscribe_transient_local: True
+      inflation_layer:
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+
+map_server:
+  ros__parameters:
+    use_sim_time: True
+    yaml_filename: "my_map.yaml"
+
+planner_server:
+  ros__parameters:
+    use_sim_time: True
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true

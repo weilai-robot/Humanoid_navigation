@@ -1,0 +1,24 @@
+<mujoco model="go2 stairs terrain scene">
+  <include file="unitree_go2/go2_mjx.xml"/>
+  <include file="stairs_terrain.xml"/>
+
+  <sensor>
+    <contact name="FR_foot_contact" geom2="FR" geom1="floor" data="normal" num="1" />
+    <contact name="RR_foot_contact" geom2="RR" geom1="floor" data="normal " num="1" />
+    <contact name="FL_foot_contact" geom2="FL" geom1="floor" data="normal" num="1" />
+    <contact name="RL_foot_contact" geom2="RL" geom1="floor" data="normal" num="1" />
+  </sensor>
+
+  <keyframe>
+    <key name="home"
+      qpos="
+      7.47569 -0.507727 -0.119553
+      1 0 0 0
+      0.1 0.9 -1.8
+      -0.1 0.9 -1.8
+      0.1 0.9 -1.8
+      -0.1 0.9 -1.8"
+      ctrl="0.1 0.9 -1.8 -0.1 0.9 -1.8 0.1 0.9 -1.8 -0.1 0.9 -1.8"/>
+  </keyframe>
+
+</mujoco>
