@@ -51,4 +51,18 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
             arguments=['0', '0', '1.31', '0', '0', '0', 'map', 'camera_init']
         ),
+
+        # ---- 4. 静态TF: base_footprint -> base_link ----
+        # 正常应由 URDF/robot_state_publisher 发布，但 navigation.launch.py 未启动它，
+        # 导致 base_link 不存在，Costmap/Controller (robot_base_frame=base_link) 报
+        # "invalid frame id base_link" 并拒绝导航目标。
+        # base_footprint 是 base_link(骨盆)在地面的投影：x=y=0、无旋转，
+        # Z≈0.86m (base_link 在 odom≈-0.45m, base_footprint 在 odom≈-1.31m)。
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='tf_footprint_to_base_link',
+            parameters=[{'use_sim_time': True}],
+            arguments=['0', '0', '0.86', '0', '0', '0', 'base_footprint', 'base_link']
+        ),
     ])
