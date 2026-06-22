@@ -4,6 +4,7 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg_humanoid = get_package_share_directory('humanoid_sim')
@@ -45,9 +46,25 @@ def generate_launch_description():
         }.items()
     )
 
+    # ====== 4. cmd_vel relay: /cmd_vel -> /cmd_vel_limiter ======
+    # Nav2 的 controller_server/velocity_smoother 最终把速度发布到 /cmd_vel
+    # (controller_server 的 cmd_vel_topic 参数在标准 Nav2 中被忽略, 硬编码为 cmd_vel)。
+    # 而 control_module 只订阅 /cmd_vel_limiter (rl_x1_sim.yaml: sub_joy_vel_name)。
+    # 这里用 topic_tools relay 把 /cmd_vel 转发到 /cmd_vel_limiter, 打通速度链路。
+    # 依赖: ros-humble-topic-tools
+    cmd_vel_relay = Node(
+        package='topic_tools',
+        executable='relay',
+        name='cmd_vel_relay',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        arguments=['/cmd_vel', '/cmd_vel_limiter'],
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='True'),
         tf_bridge_launch,
         # pc2scan_launch,
-        nav2_launch
+        nav2_launch,
+        cmd_vel_relay,
     ])
