@@ -185,6 +185,11 @@ class LidarBridgeNode(Node):
                 f"valid hits={len(pts)}", throttle_duration_sec=5.0
             )
             return
+        if self._frame_count % 20 == 0:
+            self.get_logger().info(
+                f"MID360 hits={len(pts)}, downsample={self._downsample}",
+                throttle_duration_sec=2.0,
+            )
 
         # 6. 发布点云
         stamp_sec = msg.header.stamp.sec
