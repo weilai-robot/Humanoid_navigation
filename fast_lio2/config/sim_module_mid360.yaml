@@ -16,7 +16,7 @@
             time_offset_lidar_to_imu: 0.0
 
         preprocess:
-            lidar_type: 5                 # 5=generic PointCloud2 fallback in this Fast-LIO fork
+            lidar_type: 4                 # 4=MID360-compatible PointCloud2 with x/y/z/intensity/tag/line
             scan_line: 4
             scan_rate: 10
             timestamp_unit: 2             # 2=ROS Header Time

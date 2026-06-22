@@ -220,15 +220,29 @@ class LidarBridgeNode(Node):
         self.lidar_pub.publish(msg)
 
     def _publish_pc2(self, pts: np.ndarray, sec: int, nsec: int):
+        dtype = np.dtype([
+            ("x", "<f4"),
+            ("y", "<f4"),
+            ("z", "<f4"),
+            ("intensity", "<f4"),
+            ("tag", "u1"),
+            ("line", "u1"),
+        ])
         fields = [
-            PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
-            PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
-            PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
-            PointField(name="intensity", offset=12, datatype=PointField.FLOAT32, count=1),
+            PointField(name="x", offset=dtype.fields["x"][1], datatype=PointField.FLOAT32, count=1),
+            PointField(name="y", offset=dtype.fields["y"][1], datatype=PointField.FLOAT32, count=1),
+            PointField(name="z", offset=dtype.fields["z"][1], datatype=PointField.FLOAT32, count=1),
+            PointField(name="intensity", offset=dtype.fields["intensity"][1], datatype=PointField.FLOAT32, count=1),
+            PointField(name="tag", offset=dtype.fields["tag"][1], datatype=PointField.UINT8, count=1),
+            PointField(name="line", offset=dtype.fields["line"][1], datatype=PointField.UINT8, count=1),
         ]
-        pts_i = np.empty((len(pts), 4), dtype=np.float32)
-        pts_i[:, :3] = pts.astype(np.float32, copy=False)
-        pts_i[:, 3] = 100.0
+        pts_i = np.empty(len(pts), dtype=dtype)
+        pts_i["x"] = pts[:, 0].astype(np.float32, copy=False)
+        pts_i["y"] = pts[:, 1].astype(np.float32, copy=False)
+        pts_i["z"] = pts[:, 2].astype(np.float32, copy=False)
+        pts_i["intensity"] = 100.0
+        pts_i["tag"] = 0
+        pts_i["line"] = (np.arange(len(pts), dtype=np.uint32) % 4).astype(np.uint8)
 
         msg = PointCloud2()
         msg.header.stamp.sec = sec
@@ -236,12 +250,12 @@ class LidarBridgeNode(Node):
         msg.header.frame_id = "lidar_link"
         msg.fields = fields
         msg.is_bigendian = False
-        msg.point_step = 16
+        msg.point_step = dtype.itemsize
         msg.height = 1
         msg.width = len(pts)
         msg.row_step = msg.point_step * msg.width
         msg.is_dense = True
-        msg.data = np.ascontiguousarray(pts_i).tobytes()
+        msg.data = pts_i.tobytes()
         self.lidar_pub.publish(msg)
 
 
