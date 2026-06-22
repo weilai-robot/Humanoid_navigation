@@ -16,7 +16,7 @@
             time_offset_lidar_to_imu: 0.0
 
         preprocess:
-            lidar_type: 1                 # 1=Livox CustomMsg
+            lidar_type: 4                 # 4=generic PointCloud2; avoids Livox CustomMsg runtime typesupport in sim
             scan_line: 4
             scan_rate: 10
             timestamp_unit: 2             # 2=ROS Header Time

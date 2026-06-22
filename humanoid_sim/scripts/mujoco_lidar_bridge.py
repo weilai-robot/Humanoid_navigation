@@ -32,6 +32,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseStamped
 from rosgraph_msgs.msg import Clock
+from sensor_msgs.msg import PointCloud2, PointField
 
 # --- MuJoCo-LiDAR ---
 _MUJOCO_LIDAR_SRC = os.environ.get(
@@ -45,10 +46,9 @@ from mujoco_lidar import MjLidarWrapper, scan_gen
 # --- Livox CustomMsg ---
 try:
     from livox_ros_driver2.msg import CustomMsg, CustomPoint
-    _USE_CUSTOM_MSG = True
+    _HAS_CUSTOM_MSG = True
 except ImportError:
-    from sensor_msgs.msg import PointCloud2, PointField
-    _USE_CUSTOM_MSG = False
+    _HAS_CUSTOM_MSG = False
     print("[WARN] livox_ros_driver2 不可用，回退 PointCloud2")
 
 # --- 默认参数 ---
@@ -67,6 +67,7 @@ class LidarBridgeNode(Node):
         self.declare_parameter("model_path", "")
         self.declare_parameter("lidar_hz", _LIDAR_HZ)
         self.declare_parameter("downsample", _LIDAR_DOWNSAMPLE)
+        self.declare_parameter("output_type", "pointcloud2")
 
         model_path = self.get_parameter("model_path").value
         if not model_path:
@@ -75,6 +76,14 @@ class LidarBridgeNode(Node):
 
         self._lidar_hz = self.get_parameter("lidar_hz").value
         self._downsample = self.get_parameter("downsample").value
+        output_type = str(self.get_parameter("output_type").value).lower()
+        if output_type not in ("pointcloud2", "custom", "auto"):
+            raise RuntimeError("output_type must be one of: pointcloud2, custom, auto")
+        self._use_custom_msg = (output_type == "custom") or (
+            output_type == "auto" and _HAS_CUSTOM_MSG
+        )
+        if self._use_custom_msg and not _HAS_CUSTOM_MSG:
+            raise RuntimeError("output_type=custom requires livox_ros_driver2")
         self._lidar_period_sec = 1.0 / self._lidar_hz
 
         # --- 加载 MuJoCo 场景 (仅用于几何体 + 射线追踪, 不做物理) ---
@@ -118,7 +127,7 @@ class LidarBridgeNode(Node):
         )
         self.create_subscription(PoseStamped, "/mujoco/base_pose", self._pose_cb, qos)
 
-        if _USE_CUSTOM_MSG:
+        if self._use_custom_msg:
             self.lidar_pub = self.create_publisher(CustomMsg, "/livox/lidar", 10)
         else:
             self.lidar_pub = self.create_publisher(PointCloud2, "/livox/lidar", 10)
@@ -128,6 +137,7 @@ class LidarBridgeNode(Node):
         self.get_logger().info(
             f"LidarBridge 启动 (事件驱动): model={model_path}\n"
             f"  lidar_hz={self._lidar_hz}, downsample={self._downsample}\n"
+            f"  output_type={'custom' if self._use_custom_msg else 'pointcloud2'}\n"
             f"  base_pose 驱动: /clock (1000Hz) + /livox/lidar ({self._lidar_hz}Hz)\n"
         )
 
@@ -180,7 +190,7 @@ class LidarBridgeNode(Node):
         stamp_sec = msg.header.stamp.sec
         stamp_nsec = msg.header.stamp.nanosec
 
-        if _USE_CUSTOM_MSG:
+        if self._use_custom_msg:
             self._publish_custom(pts, stamp_sec, stamp_nsec)
         else:
             self._publish_pc2(pts, stamp_sec, stamp_nsec)
@@ -214,19 +224,24 @@ class LidarBridgeNode(Node):
             PointField(name="x", offset=0, datatype=PointField.FLOAT32, count=1),
             PointField(name="y", offset=4, datatype=PointField.FLOAT32, count=1),
             PointField(name="z", offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name="intensity", offset=12, datatype=PointField.FLOAT32, count=1),
         ]
+        pts_i = np.empty((len(pts), 4), dtype=np.float32)
+        pts_i[:, :3] = pts.astype(np.float32, copy=False)
+        pts_i[:, 3] = 100.0
+
         msg = PointCloud2()
         msg.header.stamp.sec = sec
         msg.header.stamp.nanosec = nsec
         msg.header.frame_id = "lidar_link"
         msg.fields = fields
         msg.is_bigendian = False
-        msg.point_step = 12
+        msg.point_step = 16
         msg.height = 1
         msg.width = len(pts)
         msg.row_step = msg.point_step * msg.width
         msg.is_dense = True
-        msg.data = np.ascontiguousarray(pts, dtype=np.float32).tobytes()
+        msg.data = np.ascontiguousarray(pts_i).tobytes()
         self.lidar_pub.publish(msg)
 
 
