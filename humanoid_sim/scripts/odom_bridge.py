@@ -20,7 +20,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Twist
 from tf2_ros import TransformBroadcaster
 import math
 # 注意: 不要 import numpy / scipy。
@@ -78,13 +78,32 @@ class OdomBridge(Node):
             Odometry, input_topic, self.odom_callback, qos
         )
 
+        # --- cmd_vel 转发: /cmd_vel -> /cmd_vel_limiter ---
+        # Nav2 controller_server/velocity_smoother 最终把速度发到 /cmd_vel
+        # (controller_server 的 cmd_vel_topic 参数在标准 Nav2 中被忽略, 硬编码为 cmd_vel),
+        # 而 control_module 只订阅 /cmd_vel_limiter (rl_x1_sim.yaml: sub_joy_vel_name)。
+        # 在此直接转发, 避免依赖 topic_tools (robostack/conda 常未安装)。
+        self.declare_parameter('cmd_vel_in', '/cmd_vel')
+        self.declare_parameter('cmd_vel_out', '/cmd_vel_limiter')
+        cmd_in = self.get_parameter('cmd_vel_in').value
+        cmd_out = self.get_parameter('cmd_vel_out').value
+        self.cmd_vel_pub = self.create_publisher(Twist, cmd_out, 10)
+        self.cmd_vel_sub = self.create_subscription(
+            Twist, cmd_in, self._cmd_vel_relay_cb, 10
+        )
+
         self.get_logger().info(
             f'OdomBridge 启动:\n'
             f'  输入: {input_topic}\n'
             f'  输出TF: {self.odom_frame} -> {self.base_frame}\n'
             f'  输出话题: {output_topic}\n'
+            f'  cmd_vel 转发: {cmd_in} -> {cmd_out}\n'
             f'  Z偏移: {self.body_to_footprint_z}m'
         )
+
+    def _cmd_vel_relay_cb(self, msg: Twist):
+        """把 Nav2 的 /cmd_vel 原样转发到运动控制订阅的 /cmd_vel_limiter。"""
+        self.cmd_vel_pub.publish(msg)
 
     def odom_callback(self, msg: Odometry):
         """

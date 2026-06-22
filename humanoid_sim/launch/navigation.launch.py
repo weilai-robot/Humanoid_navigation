@@ -46,25 +46,14 @@ def generate_launch_description():
         }.items()
     )
 
-    # ====== 4. cmd_vel relay: /cmd_vel -> /cmd_vel_limiter ======
-    # Nav2 的 controller_server/velocity_smoother 最终把速度发布到 /cmd_vel
-    # (controller_server 的 cmd_vel_topic 参数在标准 Nav2 中被忽略, 硬编码为 cmd_vel)。
-    # 而 control_module 只订阅 /cmd_vel_limiter (rl_x1_sim.yaml: sub_joy_vel_name)。
-    # 这里用 topic_tools relay 把 /cmd_vel 转发到 /cmd_vel_limiter, 打通速度链路。
-    # 依赖: ros-humble-topic-tools
-    cmd_vel_relay = Node(
-        package='topic_tools',
-        executable='relay',
-        name='cmd_vel_relay',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
-        arguments=['/cmd_vel', '/cmd_vel_limiter'],
-    )
+    # 注: cmd_vel -> cmd_vel_limiter 的转发不再用 topic_tools relay 节点
+    # (robostack/conda 的 ROS Humble 常未安装 topic_tools, 找不到 relay 可执行文件
+    #  会让整个 launch 抛异常并自我 shutdown)。
+    # 该转发已并入 odom_bridge (tf_bridge.launch.py 内, 纯 Python 节点, 无额外依赖)。
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='True'),
         tf_bridge_launch,
         # pc2scan_launch,
         nav2_launch,
-        cmd_vel_relay,
     ])
