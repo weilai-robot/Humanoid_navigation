@@ -91,15 +91,36 @@ class LidarBridgeNode(Node):
         self.model = mujoco.MjModel.from_xml_path(model_path)
         self.data = mujoco.MjData(self.model)
 
+        # The lidar bridge owns a separate MuJoCo model used only for ray casts.
+        # Move every robot geom into group 3 so geomgroup[3]=0 removes self hits.
+        robot_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "x1-body")
+        excluded_geom_count = 0
+        if robot_body_id >= 0:
+            robot_bodies = {robot_body_id}
+            changed = True
+            while changed:
+                changed = False
+                for body_id in range(self.model.nbody):
+                    if body_id not in robot_bodies and self.model.body_parentid[body_id] in robot_bodies:
+                        robot_bodies.add(body_id)
+                        changed = True
+            for geom_id in range(self.model.ngeom):
+                if self.model.geom_bodyid[geom_id] in robot_bodies:
+                    self.model.geom_group[geom_id] = 3
+                    excluded_geom_count += 1
+
         # 初始化 LiDAR wrapper
         geomgroup = np.ones((mujoco.mjNGROUP,), dtype=np.ubyte)
-        geomgroup[3] = 0  # 排除碰撞几何组 (避免与视觉网格重复)
+        geomgroup[3] = 0  # 排除机器人自身与碰撞几何组
         self.lidar = MjLidarWrapper(
             self.model,
             site_name="lidar_site",
             backend="cpu",
             cutoff_dist=30.0,
             args={"geomgroup": geomgroup},
+        )
+        self.get_logger().info(
+            f"LiDAR raycast excludes {excluded_geom_count} robot geoms via group 3"
         )
         self.livox_gen = scan_gen.LivoxGenerator("mid360")
 
