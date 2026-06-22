@@ -22,8 +22,11 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
-import numpy as np
-from scipy.spatial.transform import Rotation
+import math
+# 注意: 不要 import numpy / scipy。
+# 在本机 conda 环境里 numpy/scipy 首次导入极慢(常卡在 numpy.ma 等),
+# 会拖慢 odom_bridge 启动、连带整个 navigation.launch 易被中断。
+# 这里仅用标准库 math 做四元数运算, 等价替换原 scipy.spatial.transform.Rotation。
 
 
 class OdomBridge(Node):
@@ -100,10 +103,16 @@ class OdomBridge(Node):
         # 将 body->base_footprint 的偏移（在 body 局部坐标系下）转换到世界坐标系
         # body 到 base_footprint 在 body 局部坐标系下 is (0, 0, -1.31)
         # 需要用 body 的旋转矩阵将其旋转到世界坐标系
-        quat = [ori.x, ori.y, ori.z, ori.w]
-        rot = Rotation.from_quat(quat)
-        local_offset = np.array([0.0, 0.0, self.body_to_footprint_z])
-        world_offset = rot.apply(local_offset)
+        # 用四元数 (x,y,z,w) 旋转局部向量 [0, 0, body_to_footprint_z] 到世界系。
+        # 旋转矩阵第三列即为对 [0,0,1] 的旋转结果, 乘以 z 偏移即可:
+        #   R[:,2] = [2(xz+wy), 2(yz-wx), 1-2(x^2+y^2)]
+        qx, qy, qz, qw = ori.x, ori.y, ori.z, ori.w
+        zoff = self.body_to_footprint_z
+        world_offset = (
+            zoff * 2.0 * (qx * qz + qw * qy),
+            zoff * 2.0 * (qy * qz - qw * qx),
+            zoff * (1.0 - 2.0 * (qx * qx + qy * qy)),
+        )
 
         # base_footprint 在 odom 坐标系下的位置
         footprint_x = pos.x + world_offset[0]
@@ -117,10 +126,11 @@ class OdomBridge(Node):
 
         
         # 强制 base_footprint 只保留 Yaw 角 (抹平 Pitch 和 Roll 以满足 Nav2 平面代价地图要求)
-        r = Rotation.from_quat([ori.x, ori.y, ori.z, ori.w])
-        euler = r.as_euler('xyz', degrees=False)
-        yaw = euler[2]
-        flat_quat = Rotation.from_euler('xyz', [0, 0, yaw]).as_quat()
+        # 从四元数提取 yaw (绕 Z), 再用纯 yaw 生成扁平四元数 (roll=pitch=0)
+        yaw = math.atan2(2.0 * (qw * qz + qx * qy),
+                         1.0 - 2.0 * (qy * qy + qz * qz))
+        half = yaw * 0.5
+        flat_quat = [0.0, 0.0, math.sin(half), math.cos(half)]  # (x, y, z, w)
 
         # ========== 1. 广播 TF: odom -> base_footprint ==========
         t = TransformStamped()
