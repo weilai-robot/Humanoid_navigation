@@ -31,9 +31,11 @@
             det_range: 10.0
             extrinsic_est_en: false
             extrinsic_T: [ 0.0, 0.0, 0.0 ]
-            extrinsic_R: [ 1.0, 0.0, 0.0,
-                           0.0, -1.0, 0.0,
-                           0.0, 0.0, -1.0 ]
+            # MuJoCo lidar_site: quat="0 0 1 0" = 180° 绕 Z 轴旋转
+            # R_lidar_to_imu 需匹配此旋转: X→-X, Y→-Y, Z→Z
+            extrinsic_R: [-1.0,  0.0,  0.0,
+                            0.0, -1.0,  0.0,
+                            0.0,  0.0,  1.0 ]
 
         publish:
             path_en: true

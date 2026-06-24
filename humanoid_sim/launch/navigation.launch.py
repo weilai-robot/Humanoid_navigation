@@ -31,9 +31,7 @@ def generate_launch_description():
     #     )
     # )
 
-    # ====== 3. 包含 Nav2 核心 (AMCL + MPPI + Costmap) ======
-    # Nav2 controller_server 在 nav2_mujoco.yaml 中配置 cmd_vel_topic: /cmd_vel_limiter
-    # 直接输出到 control_module 订阅的 topic，无需额外 remap
+    # ====== 3. 包含 Nav2 核心 (AMCL + MPPI + Costmap) + RViz ======
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_nav2, 'launch', 'bringup_launch.py')
@@ -46,14 +44,20 @@ def generate_launch_description():
         }.items()
     )
 
-    # 注: cmd_vel -> cmd_vel_limiter 的转发不再用 topic_tools relay 节点
-    # (robostack/conda 的 ROS Humble 常未安装 topic_tools, 找不到 relay 可执行文件
-    #  会让整个 launch 抛异常并自我 shutdown)。
-    # 该转发已并入 odom_bridge (tf_bridge.launch.py 内, 纯 Python 节点, 无额外依赖)。
+    # ====== 4. RViz (Fixed Frame: map) ======
+    rviz_config = os.path.join(pkg_humanoid, 'rviz_cfg', 'nav.rviz')
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        arguments=['-d', rviz_config],
+        parameters=[{'use_sim_time': use_sim_time}],
+        output='screen'
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='True'),
         tf_bridge_launch,
-        # pc2scan_launch,
         nav2_launch,
+        rviz_node,
     ])

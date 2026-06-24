@@ -23,6 +23,7 @@ install(DIRECTORY
   worlds
   config
   maps
+  rviz_cfg
   DESTINATION share/${PROJECT_NAME}
 )
 

@@ -1,0 +1,93 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 0
+    Name: Displays
+    Property Tree Widget:
+      Expanded: ~
+      Splitter Ratio: 0.5
+    Tree Height: 600
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Axes: true
+      Frame Timeout: 15.0
+    - Class: rviz_default_plugins/RobotModel
+      Name: RobotModel
+      Enabled: false
+      Description Topic: /robot_description
+    - Class: rviz_default_plugins/Map
+      Name: Global Costmap
+      Topic: /global_costmap/costmap
+      Enabled: true
+      Color Scheme: costmap
+      Update Topic: /global_costmap/costmap_updates
+    - Class: rviz_default_plugins/Map
+      Name: Local Costmap
+      Topic: /local_costmap/costmap
+      Enabled: true
+      Color Scheme: costmap
+      Update Topic: /local_costmap/costmap_updates
+    - Class: rviz_default_plugins/Map
+      Name: Static Map
+      Topic: /map
+      Enabled: true
+      Color Scheme: map
+    - Class: rviz_default_plugins/Path
+      Name: Global Path
+      Topic: /plan
+      Enabled: true
+      Color: 25; 255; 0
+    - Class: rviz_default_plugins/Path
+      Name: Local Path
+      Topic: /local_plan
+      Enabled: true
+      Color: 255; 255; 0
+    - Class: rviz_default_plugins/PoseWithCovariance
+      Name: Amcl Pose
+      Topic: /amcl_pose
+      Enabled: false
+    - Class: rviz_default_plugins/PoseArray
+      Name: Amcl Particles
+      Topic: /particle_cloud
+      Enabled: false
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Cloud Registered
+      Topic: /cloud_registered
+      Enabled: true
+      Size (Pixels): 2
+      Alpha: 0.3
+      Color: 0; 255; 255
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Cloud Body
+      Topic: /cloud_registered_body
+      Enabled: false
+      Size (Pixels): 2
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Voxel Map
+      Topic: /local_costmap/voxel_grid
+      Enabled: false
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic: /goal_pose
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Target Frame: base_link
+      X: 0
+      Y: 0
+      Scale: 30
