@@ -178,11 +178,11 @@ local_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
         publish_voxel_map: True        # 调试时开启, RViz 中可看 3D 体素
-        origin_z: -1.4                 # MuJoCo: lidar在odom Z=0, base_link≈-0.45m, 地面≈-1.25m
+        origin_z: -0.2                 # odom 系中地面 Z≈0，从 -0.2 开始覆盖
         z_resolution: 0.1
-        z_voxels: 25                   # 25层×0.1m=2.5m，覆盖[-1.4m, 1.1m]，传感器origin Z≈0.87m在界内
-        max_obstacle_height: 0.2       # 0.2m ≈ 地面(-1.25m)+1.45m障碍物顶部
-        min_obstacle_height: -1.0      # -1.0m ≈ 地面(-1.25m)+0.25m，跳过地面噪声
+        z_voxels: 30                   # 30层×0.1m=3.0m，覆盖[-0.2m, 2.8m]全高度
+        max_obstacle_height: 2.5       # 保留墙壁全高 (地面0m→天花板2.8m)
+        min_obstacle_height: 0.05      # 排除地面噪声 (Z<0.05m 的点丢弃)
         mark_threshold: 2              # # 体素列中至少 2 个点才标记障碍（单个散射噪点不再触发）
         unknown_threshold: 15
         combination_method: 1          # 1=overwrite, 每次更新直接覆盖而非累积
