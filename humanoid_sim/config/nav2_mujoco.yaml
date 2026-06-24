@@ -48,7 +48,7 @@ controller_server:
     # cmd_vel 由 Nav2 默认发到 /cmd_vel, odom_bridge.py relay 转发到 /cmd_vel_limiter
     # 不在此设置 cmd_vel_topic, 避免与 relay 冲突产生双写
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.5
+    min_y_velocity_threshold: 0.001  # 0.5→0.001: 不忽略任何横向速度
     min_theta_velocity_threshold: 0.001
     failure_tolerance: 0.5
     odom_topic: /odom
@@ -143,7 +143,7 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 15.0              # 5→15: 强化避障, 压制 PathAlign(14) 的沿墙倾向
         critical_cost: 300.0
         collision_cost: 1000000.0
         consider_footprint: false
@@ -160,11 +160,11 @@ local_costmap:
       robot_base_frame: base_link
       use_sim_time: True
       rolling_window: true
-      width: 4
-      height: 4
+      width: 6                         # 4→6: 给 MPPI 更多前方视野
+      height: 6
       resolution: 0.05
-      robot_radius: 0.15             # 0.2→0.15: X1 宽约0.3m, 留通道A通行空间
-      transform_tolerance: 0.5   # 允许TF时间戳偏差，防止点云被丢弃
+      robot_radius: 0.15
+      transform_tolerance: 0.5
 
       plugins: ["voxel_layer", "denoise_layer", "inflation_layer"]
 
@@ -212,8 +212,8 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.35         # 0.7→0.35: 与全局一致, 不堵通道
+        cost_scaling_factor: 3.0       # 10→3: 缓梯度, 机器人从更远处"感受"墙壁
+        inflation_radius: 0.5          # 0.35→0.5: RL 步态有±0.2m漂移, 需更大缓冲
 
 # ==================== 全局代价地图 ====================
 global_costmap:
