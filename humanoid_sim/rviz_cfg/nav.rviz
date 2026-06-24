@@ -17,61 +17,80 @@ Visualization Manager:
       Enabled: true
       Show Axes: true
       Frame Timeout: 15.0
-    - Class: rviz_default_plugins/RobotModel
-      Name: RobotModel
-      Enabled: false
-      Description Topic: /robot_description
-    - Class: rviz_default_plugins/Map
-      Name: Global Costmap
-      Topic: /global_costmap/costmap
-      Enabled: true
-      Color Scheme: costmap
-      Update Topic: /global_costmap/costmap_updates
-    - Class: rviz_default_plugins/Map
-      Name: Local Costmap
-      Topic: /local_costmap/costmap
-      Enabled: true
-      Color Scheme: costmap
-      Update Topic: /local_costmap/costmap_updates
+      Update Interval: 0
     - Class: rviz_default_plugins/Map
       Name: Static Map
-      Topic: /map
+      Topic:
+        Value: /map
+        Depth: 5
       Enabled: true
       Color Scheme: map
+      Alpha: 0.5
+    - Class: rviz_default_plugins/Map
+      Name: Global Costmap
+      Topic:
+        Value: /global_costmap/costmap
+        Depth: 5
+      Enabled: true
+      Color Scheme: costmap
+      Alpha: 0.4
+      Update Topic:
+        Value: /global_costmap/costmap_updates
+        Depth: 5
+    - Class: rviz_default_plugins/Map
+      Name: Local Costmap
+      Topic:
+        Value: /local_costmap/costmap
+        Depth: 5
+      Enabled: true
+      Color Scheme: costmap
+      Alpha: 0.5
+      Update Topic:
+        Value: /local_costmap/costmap_updates
+        Depth: 5
     - Class: rviz_default_plugins/Path
       Name: Global Path
-      Topic: /plan
+      Topic:
+        Value: /plan
+        Depth: 5
       Enabled: true
       Color: 25; 255; 0
+      Line Style: Lines
+      Line Width: 0.03
     - Class: rviz_default_plugins/Path
-      Name: Local Path
-      Topic: /local_plan
+      Name: Local Path (MPPI)
+      Topic:
+        Value: /local_plan
+        Depth: 5
       Enabled: true
       Color: 255; 255; 0
-    - Class: rviz_default_plugins/PoseWithCovariance
-      Name: Amcl Pose
-      Topic: /amcl_pose
-      Enabled: false
-    - Class: rviz_default_plugins/PoseArray
-      Name: Amcl Particles
-      Topic: /particle_cloud
-      Enabled: false
+      Line Style: Lines
+      Line Width: 0.05
+    - Class: rviz_default_plugins/PoseStamped
+      Name: Goal Pose
+      Topic:
+        Value: /goal_pose
+        Depth: 5
+      Enabled: true
+      Color: 255; 25; 0
+      Shape: Arrow
     - Class: rviz_default_plugins/PointCloud2
       Name: Cloud Registered
-      Topic: /cloud_registered
+      Topic:
+        Value: /cloud_registered
+        Depth: 5
       Enabled: true
       Size (Pixels): 2
       Alpha: 0.3
       Color: 0; 255; 255
+      Color Transformer: AxisColor
     - Class: rviz_default_plugins/PointCloud2
       Name: Cloud Body
-      Topic: /cloud_registered_body
+      Topic:
+        Value: /cloud_registered_body
+        Depth: 5
       Enabled: false
       Size (Pixels): 2
-    - Class: rviz_default_plugins/MarkerArray
-      Name: Voxel Map
-      Topic: /local_costmap/voxel_grid
-      Enabled: false
   Global Options:
     Background Color: 48; 48; 48
     Fixed Frame: map
@@ -79,9 +98,13 @@ Visualization Manager:
   Tools:
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/SetInitialPose
-      Topic: /initialpose
+      Topic:
+        Value: /initialpose
+        Depth: 5
     - Class: rviz_default_plugins/SetGoal
-      Topic: /goal_pose
+      Topic:
+        Value: /goal_pose
+        Depth: 5
   Value: true
   Views:
     Current:
@@ -90,4 +113,5 @@ Visualization Manager:
       Target Frame: base_link
       X: 0
       Y: 0
-      Scale: 30
+      Scale: 40
+      Angle: 0

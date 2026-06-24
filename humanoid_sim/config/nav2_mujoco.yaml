@@ -2,15 +2,14 @@
 # Nav2 参数 — MuJoCo X1 仿真 (FastLIO2 + 3D VoxelLayer + MPPI)
 # ============================================================================
 # 传感器: /cloud_registered_body (FastLIO2, PointCloud2, body系)
-# TF 链: map -> odom -> base_link -> lidar_link
-#   - odom->base_link : sim2sim_nav.py 发布 (imu site 位置)
-#   - base_link->lidar_link : sim2sim_nav.py 静态TF
-#   - map->odom : FAST_LIO2 提供 (需启动 fast_lio mapping 节点)
-# 里程计: sim2sim_nav.py 发布 odom→base_link TF
-# 全局地图: mujoco.yaml (FAST_LIO2 建图后转换的 2D 栅格地图)
-# 坐标系说明: FAST_LIO2 初始化 lidar 在 Z=0,
-#   base_link(骨盆) ≈ -0.45m, 地面 ≈ -1.25m (odom系)
-# 注意: ObstacleCritic 有 bug, 用 CostCritic 替代
+# TF 链: map -> odom -> base_footprint -> base_link
+#   - map -> odom: 静态 TF (tf_bridge.launch.py)
+#   - odom -> base_footprint: odom_bridge.py (FastLIO2 /Odometry 转换)
+#   - base_footprint -> base_link: 静态 TF (Z=0.86m, tf_bridge.launch.py)
+# 里程计: odom_bridge.py 发布 /odom (含速度, 从 FastLIO2 /Odometry 透传)
+# 全局地图: lab_env_map.yaml (从 lab_env.xml 自动生成)
+# 坐标系: odom 系地面 Z=0, base_link Z≈0.86m, 墙壁 Z=0~2.8m
+# 控制器: 纯 MPPI (无 RotationShim, 人形不适合硬原地旋转)
 # ============================================================================
 
 # --- AMCL (阶段5启用, 当前由 tf_bridge 静态 map->odom 代替) ---
@@ -68,20 +67,16 @@ controller_server:
       yaw_goal_tolerance: 0.35
       stateful: True
 
-    # ---- RotationShimController 包装 MPPI ----
-    # 目标在身后时：检测机器人朝向与路径角度差，超过 angular_dist_threshold 先原地旋转对齐，再交给 MPPI
+    # ---- MPPI 控制器 (直接使用, 无 RotationShim) ----
+    # RotationShimController 对人形机器人做硬原地旋转, RL 步态策略无法处理
+    # 纯角速度 (vx=0, wz=0.4) → 步态变形 → 摔倒
+    # MPPI 通过轨迹采样自然产生弧线转弯, 对人形更安全
     FollowPath:
-      plugin: "nav2_rotation_shim_controller::RotationShimController"
-      primary_controller: "nav2_mppi_controller::MPPIController"
-      angular_dist_threshold: 0.785  # 45°：角度差 > 45° 时先旋转，目标在身后必然触发
-      forward_sampling_distance: 0.5
-      rotate_to_heading_angular_vel: 0.4   # 与 wz_max 一致
-      max_angular_accel: 2.0
-      simulate_ahead_time: 1.0
-      time_steps: 16                    # 32→16: 减半计算量，适配低RTF
+      plugin: "nav2_mppi_controller::MPPIController"
+      time_steps: 16
       model_dt: 0.1
-      batch_size: 200                   # 800→200: 4x 减少采样量
-      vx_std: 0.2                       # 增大采样标准差，补偿 batch_size 减少
+      batch_size: 200
+      vx_std: 0.2
       vy_std: 0.0
       wz_std: 0.4
       vx_max: 0.3
@@ -90,19 +85,19 @@ controller_server:
       wz_max: 0.4
       iteration_count: 1
       prune_distance: 1.7
-      transform_tolerance: 1.0          # 0.5→1.0: 低RTF下TF更慢，增大容忍
+      transform_tolerance: 1.0
       temperature: 0.5
       gamma: 0.015
       motion_model: "DiffDrive"
 
       # 加速度限制
-      ax_max: 2.0                       # 1.5→2.0: 加速更激进
+      ax_max: 2.0
       ax_min: -2.0
       az_max: 2.0
 
       visualize: true
 
-      # 评分标准 — 不用 ObstacleCritic(有bug), 用 CostCritic 替代
+      # 评分标准
       critics: [
         "ConstraintCritic",
         "GoalCritic",
@@ -142,7 +137,7 @@ controller_server:
         threshold_to_consider: 1.4
       PreferForwardCritic:
         enabled: true
-        cost_weight: 2.0             # 8.0 → 2.0：Shim 已处理初始旋转，无需过强限制
+        cost_weight: 4.0             # 2.0→4.0: 无 Shim, 恢复正向偏好
         cost_power: 1
         threshold_to_consider: 0.5
       CostCritic:
