@@ -14,7 +14,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
 
     # 地图和参数文件
-    map_file = os.path.join(pkg_humanoid, 'maps', 'mujoco_car.yaml')  # f1_test1 school_room school_room2
+    map_file = os.path.join(pkg_humanoid, 'maps', 'lab_env_map.yaml')
     params_file = os.path.join(pkg_humanoid, 'config', 'nav2_mujoco.yaml')
 
     # ====== 1. 包含 tf_bridge (发布 odom 和 map->camera_init 静态 TF) ======

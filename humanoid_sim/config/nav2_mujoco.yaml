@@ -193,8 +193,8 @@ local_costmap:
         cloud_mark:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 0.2
-          min_obstacle_height: -1.0
+          max_obstacle_height: 2.5
+          min_obstacle_height: 0.05
           clearing: False
           marking: True
           obstacle_max_range: 5.0
@@ -202,8 +202,8 @@ local_costmap:
         cloud_clear:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 0.2
-          min_obstacle_height: -1.0
+          max_obstacle_height: 2.5
+          min_obstacle_height: 0.05
           clearing: True
           marking: False
           raytrace_max_range: 6.0
@@ -276,7 +276,7 @@ global_costmap:
 map_server:
   ros__parameters:
     use_sim_time: True
-    yaml_filename: "mujoco_car.yaml"         # FAST_LIO2 建图后转换的 2D 栅格地图
+    yaml_filename: "lab_env_map.yaml"  # 从 lab_env.xml 几何体自动生成
 
 # --- 全局规划器 ---
 planner_server:
