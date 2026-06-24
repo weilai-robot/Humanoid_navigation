@@ -189,25 +189,8 @@ class OdomBridge(Node):
         odom_msg.pose.covariance = msg.pose.covariance  # 保留原始协方差
 
         # 速度：直接转发 FastLIO2 的速度（body 系下的速度 ≈ base_footprint 系下的速度）
-        # TODO 以后换成人形机器人可能要进行修改，重新计算雷达位置到base_footprint的速度映射
-        # odom_msg.twist = msg.twist
-
-        # 速度：平滑滤波 (EMA 滤波，过滤高频抖动)
-        raw_tw = msg.twist.twist
-        self.filtered_twist_linear_x = self.alpha_v * raw_tw.linear.x + (1 - self.alpha_v) * self.filtered_twist_linear_x
-        self.filtered_twist_linear_y = self.alpha_v * raw_tw.linear.y + (1 - self.alpha_v) * self.filtered_twist_linear_y
-        self.filtered_twist_linear_z = self.alpha_v * raw_tw.linear.z + (1 - self.alpha_v) * self.filtered_twist_linear_z
-        self.filtered_twist_angular_x = self.alpha_v * raw_tw.angular.x + (1 - self.alpha_v) * self.filtered_twist_angular_x
-        self.filtered_twist_angular_y = self.alpha_v * raw_tw.angular.y + (1 - self.alpha_v) * self.filtered_twist_angular_y
-        self.filtered_twist_angular_z = self.alpha_v * raw_tw.angular.z + (1 - self.alpha_v) * self.filtered_twist_angular_z
-
-        odom_msg.twist.twist.linear.x = self.filtered_twist_linear_x
-        odom_msg.twist.twist.linear.y = self.filtered_twist_linear_y
-        odom_msg.twist.twist.linear.z = self.filtered_twist_linear_z
-        odom_msg.twist.twist.angular.x = self.filtered_twist_angular_x
-        odom_msg.twist.twist.angular.y = self.filtered_twist_angular_y
-        odom_msg.twist.twist.angular.z = self.filtered_twist_angular_z
-        odom_msg.twist.covariance = msg.twist.covariance
+        # Nav2 MPPI 需要准确的当前速度做轨迹预测，EMA 滤波会导致反馈滞后
+        odom_msg.twist = msg.twist
 
         self.odom_pub.publish(odom_msg)
 
