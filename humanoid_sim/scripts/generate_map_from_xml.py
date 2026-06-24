@@ -136,7 +136,7 @@ def point_to_circle_dist(px, py, cx, cy, r):
     return math.sqrt((px - cx)**2 + (py - cy)**2) - r
 
 
-def generate_map(resolution=0.05, inflation_radius=0.35,
+def generate_map(resolution=0.05, inflation_radius=0.0,
                  x_range=(-10.5, 10.5), y_range=(-5.5, 5.5)):
     w = int((x_range[1] - x_range[0]) / resolution)
     h = int((y_range[1] - y_range[0]) / resolution)
@@ -144,12 +144,12 @@ def generate_map(resolution=0.05, inflation_radius=0.35,
     print(f"Grid: {w} x {h} pixels, {w*resolution:.1f}m x {h*resolution:.1f}m")
     print(f"Resolution: {resolution}m, Inflation: {inflation_radius}m")
 
-    grid = bytearray(w * h)  # 0 = free, 254 = wall
+    # ROS PGM convention: 0=black=OCCUPIED, 254=white=FREE
+    grid = bytearray([254] * (w * h))  # default all FREE (white)
 
     for gy in range(h):
         wy = y_range[0] + gy * resolution
-        # PGM Y 翻转
-        pgm_row = h - 1 - gy
+        pgm_row = h - 1 - gy  # PGM Y flip
         for gx in range(w):
             wx = x_range[0] + gx * resolution
 
@@ -163,12 +163,12 @@ def generate_map(resolution=0.05, inflation_radius=0.35,
                 if d < min_dist:
                     min_dist = d
                     if min_dist <= 0:
-                        break  # 在障碍物内部，无需继续
+                        break
 
             if min_dist <= 0:
-                grid[pgm_row * w + gx] = 254
+                grid[pgm_row * w + gx] = 0       # OCCUPIED (black)
             elif min_dist <= inflation_radius:
-                grid[pgm_row * w + gx] = 254
+                grid[pgm_row * w + gx] = 0       # inflated obstacle (black)
 
     return grid, w, h
 
@@ -209,8 +209,9 @@ def main():
         f.write(f'occupied_thresh: 0.65\n')
         f.write(f'free_thresh: 0.25\n')
 
-    free = sum(1 for b in grid if b < 50)
-    wall = sum(1 for b in grid if b > 200)
+    # ROS convention: 254=FREE(white), 0=OCCUPIED(black)
+    free = sum(1 for b in grid if b > 200)
+    wall = sum(1 for b in grid if b < 50)
     print(f"\nGenerated: {pgm_file}")
     print(f"  Size: {w}x{h}, Free: {free} ({free/len(grid)*100:.1f}%), Wall: {wall} ({wall/len(grid)*100:.1f}%)")
 
@@ -219,7 +220,7 @@ def main():
         px = int((wx - x_range[0]) / args.resolution)
         py = h - 1 - int((wy - y_range[0]) / args.resolution)
         v = grid[py * w + px] if 0 <= py < h and 0 <= px < w else -1
-        s = 'FREE' if v < 50 else 'WALL' if v > 200 else '?'
+        s = 'FREE' if v > 200 else 'WALL' if v < 50 else '?'
         print(f"  {label:25s} ({wx:5.1f},{wy:5.1f}): {v:3d} {s}")
 
     print("\n=== Verification ===")
