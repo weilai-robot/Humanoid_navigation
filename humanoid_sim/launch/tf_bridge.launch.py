@@ -28,17 +28,9 @@ def generate_launch_description():
             }]
         ),
 
-        # ---- 2. 静态TF: map -> odom (初始为单位变换) ----
-        # AMCL 当前未启用 (tf_broadcast=False 且无 /scan)，由此静态 TF 提供 map->odom，
-        # 否则全局 costmap 无法在 map 系定位机器人，导航目标会被 bt_navigator 拒绝。
-        # future: 启用 AMCL 动态发布 map->odom 时，再注释掉此节点。
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='tf_map_to_odom',
-            parameters=[{'use_sim_time': True}],
-            arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
-        ),
+        # ---- 2. (已移除) map -> odom 静态 TF ----
+        # AMCL 已启用 (tf_broadcast=True), 会动态发布 map→odom。
+        # 如果保留此静态 TF, 会与 AMCL 的动态 TF 冲突。
 
         # ---- 3. 静态TF: map -> camera_init (FastLIO2 的世界坐标系) ----
         # FastLIO2 和 OctoMap 使用 camera_init 作为全局参考系

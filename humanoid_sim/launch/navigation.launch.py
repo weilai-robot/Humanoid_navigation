@@ -24,12 +24,12 @@ def generate_launch_description():
         )
     )
 
-    # ====== 2. 包含 pc2scan (将 3D 点云转换为 2D 激光给 AMCL) ======
-    # pc2scan_launch = IncludeLaunchDescription(
-    #     PythonLaunchDescriptionSource(
-    #         os.path.join(pkg_humanoid, 'launch', 'pc2scan.launch.py')
-    #     )
-    # )
+    # ====== 2. pc2scan (3D 点云 → 2D 激光线扫描, 供 AMCL 用) ======
+    pc2scan_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_humanoid, 'launch', 'pc2scan.launch.py')
+        )
+    )
 
     # ====== 3. 包含 Nav2 核心 (AMCL + MPPI + Costmap) + RViz ======
     nav2_launch = IncludeLaunchDescription(
@@ -58,6 +58,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='True'),
         tf_bridge_launch,
+        pc2scan_launch,
         nav2_launch,
         rviz_node,
     ])

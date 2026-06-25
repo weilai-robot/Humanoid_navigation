@@ -1,34 +1,41 @@
 # ============================================================================
-# Nav2 参数 — MuJoCo X1 仿真 (FastLIO2 + 3D VoxelLayer + MPPI)
+# Nav2 参数 — MuJoCo X1 仿真 (FastLIO2 + AMCL + 3D VoxelLayer + MPPI)
 # ============================================================================
 # 传感器: /cloud_registered_body (FastLIO2, PointCloud2, body系)
 # TF 链: map -> odom -> base_footprint -> base_link
-#   - map -> odom: 静态 TF (tf_bridge.launch.py)
+#   - map -> odom: AMCL 动态发布 (校正 FastLIO2 漂移)
 #   - odom -> base_footprint: odom_bridge.py (FastLIO2 /Odometry 转换)
 #   - base_footprint -> base_link: 静态 TF (Z=0.86m, tf_bridge.launch.py)
+# 定位: AMCL 用 /scan (pc2scan 从点云切片) 在地图中做全局定位
 # 里程计: odom_bridge.py 发布 /odom (含速度, 从 FastLIO2 /Odometry 透传)
 # 全局地图: lab_env_map.yaml (从 lab_env.xml 自动生成)
 # 坐标系: odom 系地面 Z=0, base_link Z≈0.86m, 墙壁 Z=0~2.8m
 # 控制器: 纯 MPPI (无 RotationShim, 人形不适合硬原地旋转)
 # ============================================================================
 
-# --- AMCL (阶段5启用, 当前由 tf_bridge 静态 map->odom 代替) ---
+# --- AMCL (全局定位, 校正 FastLIO2 漂移) ---
 amcl:
   ros__parameters:
     use_sim_time: True
-    alpha1: 0.2
-    alpha2: 0.2
-    alpha3: 0.2
-    alpha4: 0.2
-    alpha5: 0.2
+    alpha1: 0.2                    # odom 旋转噪声
+    alpha2: 0.2                    # odom 平移→旋转噪声
+    alpha3: 0.2                    # odom 平移噪声
+    alpha4: 0.2                    # odom 旋转→平移噪声
+    alpha5: 0.2                    # 额外旋转噪声
     base_frame_id: "base_footprint"
     global_frame_id: "map"
     odom_frame_id: "odom"
-    scan_topic: "/scan"               # 阶段5: pc2scan 输出
+    scan_topic: "/scan"            # pc2scan 从 /cloud_registered_body 切割输出
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
-    tf_broadcast: False
-    # set_initial_pose: true            # 极其重要：启动即赋初值，防止由于等待位姿导致 TF 断裂
-    # initial_pose: [0.0, 0.0, 0.0, 0.0] # 初始位姿 (x, y, z, yaw) 根据仿真起始点修改
+    tf_broadcast: True             # ← 动态发布 map→odom, 校正漂移
+    set_initial_pose: true         # ← 启动即赋初值
+    initial_pose: [0.0, 0.0, 0.0, 0.0]   # 仿真起点 (x, y, z, yaw)
+    min_particles: 500
+    max_particles: 2000
+    laser_max_range: 8.0
+    laser_min_range: 0.3
+    recovery_alpha_slow: 0.001     # 全局重定位 (防绑架)
+    recovery_alpha_fast: 0.1       # 局部重定位
 
 # --- 行为树导航器 ---
 bt_navigator:
