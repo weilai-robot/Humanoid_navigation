@@ -2,8 +2,9 @@
 TF 桥接 Launch 文件
 启动内容：
   1. odom_bridge 节点 — 将 FastLIO2 的 /Odometry 转换为 odom->base_footprint TF
-  2. 静态TF: map -> odom（初始为单位变换，后续 AMCL 接管）
-  3. 静态TF: map -> camera_init（FastLIO2/OctoMap 使用）
+  2. (已移除) map -> odom 静态 TF — AMCL 动态发布
+  3. 静态TF: odom -> camera_init — 连接 odom 树和 FastLIO2 树
+  4. 静态TF: base_footprint -> base_link
 """
 
 from launch import LaunchDescription
@@ -32,16 +33,16 @@ def generate_launch_description():
         # AMCL 已启用 (tf_broadcast=True), 会动态发布 map→odom。
         # 如果保留此静态 TF, 会与 AMCL 的动态 TF 冲突。
 
-        # ---- 3. 静态TF: map -> camera_init (FastLIO2 的世界坐标系) ----
-        # FastLIO2 和 OctoMap 使用 camera_init 作为全局参考系
-        # camera_init 在雷达安装高度(1.31m)处初始化, 不在地面
-        # 必须加上高度偏移, 否则 VoxelLayer 的传感器原点会在 Z=0 (地面), 导致 raytrace 失败
+        # ---- 3. 静态TF: odom -> camera_init ----
+        # 连接 odom 树和 FastLIO2 树, 解决 TF 死锁
+        # (之前 map→camera_init + AMCL→map→odom 导致两棵树不连通)
+        # camera_init 在雷达高度 (1.31m), odom 在地面 (0m)
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            name='tf_map_to_camera_init',
+            name='tf_odom_to_camera_init',
             parameters=[{'use_sim_time': True}],
-            arguments=['0', '0', '1.31', '0', '0', '0', 'map', 'camera_init']
+            arguments=['0', '0', '1.31', '0', '0', '0', 'odom', 'camera_init']
         ),
 
         # ---- 4. 静态TF: base_footprint -> base_link ----
