@@ -66,7 +66,7 @@
 #define INIT_TIME           (0.1)
 #define LASER_POINT_COV     (0.001)
 #define MAXN                (720000)
-#define PUBFRAME_PERIOD     (2)
+#define PUBFRAME_PERIOD     (1)
 
 /*** Time Log Variables ***/
 double kdtree_incremental_time = 0.0, kdtree_search_time = 0.0, kdtree_delete_time = 0.0;
