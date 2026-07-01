@@ -1,0 +1,51 @@
+/**:
+    ros__parameters:
+        feature_extract_enable: false
+        point_filter_num: 1
+        max_iteration: 3
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 30.0
+        runtime_pos_log_enable: false
+        map_file_path: "./test.pcd"
+
+        common:
+            lid_topic:  "/livox/lidar"
+            imu_topic:  "/livox/imu"       # sim_module 发布的 lidar IMU
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 4                 # 4=MID360-compatible PointCloud2 with x/y/z/intensity/tag/line
+            scan_line: 4
+            scan_rate: 10
+            timestamp_unit: 2             # 2=ROS Header Time
+            blind: 0.5
+
+        mapping:
+            acc_cov: 0.01
+            gyr_cov: 0.01
+            b_acc_cov: 0.001
+            b_gyr_cov: 0.001
+            fov_degree: 360.0
+            det_range: 10.0
+            extrinsic_est_en: false
+            extrinsic_T: [ 0.0, 0.0, 0.0 ]
+            # MuJoCo lidar_site: quat="0 0 1 0" = (w=0,x=0,y=1,z=0) = Ry(180°)
+            # LiDAR 倒装绕 Y 轴 180°, 正确的 R_lidar_to_imu:
+            # X→-X (前后修正), Y保持 (左右正确), Z→-Z (上下修正)
+            extrinsic_R: [-1.0,  0.0,  0.0,
+                            0.0,  1.0,  0.0,
+                            0.0,  0.0, -1.0 ]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: true
+            scan_publish_en: true
+            dense_publish_en: true
+            scan_bodyframe_pub_en: true
+
+        pcd_save:
+            pcd_save_en: true
+            interval: -1

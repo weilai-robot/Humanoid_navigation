@@ -1,0 +1,53 @@
+/**:
+    ros__parameters:
+        use_sim_time: true              # 使用 car_nav.py 发布的 /clock 仿真时间
+        feature_extract_enable: false
+        point_filter_num: 1
+        max_iteration: 10
+        filter_size_surf: 0.1
+        filter_size_map: 0.2
+        cube_side_length: 30.0
+        runtime_pos_log_enable: false
+        map_file_path: "./mujoco_car.pcd"
+
+        common:
+            lid_topic:  "/livox/lidar"
+            imu_topic:  "/imu/data"
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 1               # 1=Livox CustomMsg (car_nav.py 发布)
+                                        # 若 livox_ros_driver2 不可用改为 2 (PointCloud2)
+            scan_line: 4
+            scan_rate: 10               # 10Hz，与 car_nav.py 中 _LIDAR_HZ 一致
+            timestamp_unit: 3           # 3=ns，与 CustomMsg.offset_time 单位一致
+            blind: 0.3                  # 最小检测距离，car body 已用 group=3 排除
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.01
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0
+            det_range: 25.0
+            extrinsic_est_en: false     # 仿真中安装位置精确，禁用在线估计
+            # 小车正装 mid360 (lidar_site Z朝上，与 lidar_imu 朝向一致)
+            # car_nav.xml: lidar_site 与 lidar_imu 同位置 → T=[0,0,0]
+            # R = 单位阵：LiDAR 与 IMU 坐标系完全同向
+            extrinsic_T: [ 0.0, 0.0, 0.0 ]
+            extrinsic_R: [ 1.0, 0.0, 0.0,
+                           0.0, 1.0, 0.0,
+                           0.0, 0.0, 1.0 ]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: true
+            scan_publish_en: true
+            dense_publish_en: true
+            scan_bodyframe_pub_en: true
+
+        pcd_save:
+            pcd_save_en: true
+            interval: -1

@@ -1,0 +1,58 @@
+/**:
+    ros__parameters:
+        # ============================================================
+        # FastLIO2 配置 — 小车建图模型 (car_30)
+        # 雷达: Mid360 正装 (Z轴朝上, rpy="0 0 0")
+        # 雷达高度: 0.30m (离地)
+        # 外参: LiDAR与IMU同位置同姿态 → T=[0,0,0], R=单位阵
+        # 对应URDF: robot_30.xacro
+        # ============================================================
+        feature_extract_enable: false
+        point_filter_num: 3
+        max_iteration: 3
+        filter_size_surf: 0.5
+        filter_size_map: 0.5
+        cube_side_length: 30.0
+        runtime_pos_log_enable: false
+        map_file_path: "./car_30_map.pcd"
+
+        common:
+            lid_topic:  "/livox/lidar"
+            imu_topic:  "/imu/data"
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 1               # 1=Livox CustomMsg
+            scan_line: 4
+            scan_rate: 10               # 10Hz
+            timestamp_unit: 2           # 2=ROS Header Time (仿真)
+            blind: 0.3                  # Mid360盲区0.3m
+
+        mapping:
+            acc_cov: 0.01
+            gyr_cov: 0.01
+            b_acc_cov: 0.001
+            b_gyr_cov: 0.001
+            fov_degree: 360.0
+            det_range: 10.0
+            extrinsic_est_en: false     # 仿真中安装精确，禁用在线估计
+            # 正装LiDAR: LiDAR坐标系 = IMU坐标系 (均Z轴朝上)
+            # 与原机器人对比: 原倒装需 R=Rx(180°)=[1,0,0, 0,-1,0, 0,0,-1]
+            #               正装不需旋转补偿 → R=单位阵
+            extrinsic_T: [ 0.0, 0.0, 0.0 ]
+            extrinsic_R: [ 1.0, 0.0, 0.0,
+                           0.0, 1.0, 0.0,
+                           0.0, 0.0, 1.0 ]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: true
+            scan_publish_en: true
+            dense_publish_en: true
+            scan_bodyframe_pub_en: true
+
+        pcd_save:
+            pcd_save_en: true
+            interval: -1                # -1: 所有帧存一个文件
