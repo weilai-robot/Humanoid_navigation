@@ -6,3 +6,4 @@ tools/reports/
 __pycache__/
 *.pyc
 .vscode/
+docs/
