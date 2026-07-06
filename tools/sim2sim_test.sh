@@ -127,8 +127,8 @@ if tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
 fi
 
 if [ "$INTEGRATION_MODE" = true ]; then
-    echo -e "${YELLOW}  → Starting via integration run_sim_nav.sh...${NC}"
-    cd "$ROOT_DIR" && bash scripts/run_sim_nav.sh &
+    echo -e "${YELLOW}  → Starting via integration run_mujoco_nav.sh...${NC}"
+    cd "$ROOT_DIR" && bash scripts/run_mujoco_nav.sh &
 else
     # Standalone mode: launch components individually via tmux
     echo -e "${YELLOW}  → Starting standalone sim stack...${NC}"

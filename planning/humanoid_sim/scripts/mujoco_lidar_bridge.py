@@ -37,7 +37,7 @@ from sensor_msgs.msg import PointCloud2, PointField
 # --- MuJoCo-LiDAR ---
 _MUJOCO_LIDAR_SRC = os.environ.get(
     "MUJOCO_LIDAR_SRC",
-    os.path.expanduser("~/code/F1/navigation/MuJoCo-LiDAR/src"),
+    os.path.expanduser("~/code/F1/navigation/sim/MuJoCo-LiDAR/src"),
 )
 if _MUJOCO_LIDAR_SRC not in sys.path:
     sys.path.insert(0, _MUJOCO_LIDAR_SRC)
