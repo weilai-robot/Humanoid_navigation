@@ -38,21 +38,10 @@ find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem system)
 
+# Set Open3D path - modify this to your installation path
+set(Open3D_DIR "/home/hmj/humanoid_ws/open3d141/lib/cmake/Open3D")
 
-# set(Open3D_DIR "/home/hmj/humanoid_ws/open3d141/lib/cmake/Open3D")
-
-# Open3D prebuilt install (external dependency, not in this repo).
-# Set before build: export OPEN3D_DIR=/path/to/open3d141/lib/cmake/Open3D
-# Or pass: colcon build --cmake-args -DOpen3D_DIR=...
-if(NOT Open3D_DIR)
-  if(DEFINED ENV{OPEN3D_DIR})
-    set(Open3D_DIR "$ENV{OPEN3D_DIR}")
-  else()
-    message(FATAL_ERROR
-      "Open3D_DIR not set. Example:\n"
-      "  export OPEN3D_DIR=/path/to/open3d141/lib/cmake/Open3D")
-  endif()
-endif()
+# set(Open3D_DIR "/home/unitree/open3d141_arm/open3d141/lib/cmake/Open3D")
 find_package(Open3D REQUIRED)
 
 # Fix Open3D libraries - remove problematic .so files

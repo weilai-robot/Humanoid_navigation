@@ -811,9 +811,9 @@ void GloabalLocalization::Localization()
     std::shared_ptr<open3d::geometry::OrientedBoundingBox> OBB_map(new open3d::geometry::OrientedBoundingBox);
     std::shared_ptr<open3d::geometry::OrientedBoundingBox> OBB_scan(new open3d::geometry::OrientedBoundingBox);
     OBB_map->color_ = Eigen::Vector3d(1, 0.5, 0);
-    OBB_map->extent_ = Eigen::Vector3d(60, 60, 40);
+    OBB_map->extent_ = Eigen::Vector3d(20, 20, 10);
 
-    OBB_scan->extent_ = Eigen::Vector3d(60, 60, 40);
+    OBB_scan->extent_ = Eigen::Vector3d(20, 20, 10);
     OBB_scan->color_ = Eigen::Vector3d(0, 1, 0);
     rclcpp::Time time_current = timestamp_odom_;
     rclcpp::Time time_last = time_current - rclcpp::Duration(3, 0);

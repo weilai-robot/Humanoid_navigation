@@ -43,7 +43,7 @@ def generate_launch_description():
                 # 占据体素高度范围（基于 FastLIO2 地图坐标系）
                 # 地面在 Z≈-0.30m，障碍物从 Z=-0.20m 向上到 Z=1.50m
                 # 对应物理高度: -0.20+0.30=0.10m 到 1.50+0.30=1.80m
-                'occupancy_min_z': -0.10,       # 比原机器人(-1.10m)高1.01m
+                'occupancy_min_z': -0.05,       # 比原机器人(-1.10m)高1.01m
                 'occupancy_max_z':  1.50,       # 与原机器人相同
 
                 # 概率模型

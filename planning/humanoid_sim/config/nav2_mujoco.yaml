@@ -1,41 +1,35 @@
 # ============================================================================
-# Nav2 参数 — MuJoCo X1 仿真 (FastLIO2 + AMCL + 3D VoxelLayer + MPPI)
+# Nav2 参数 — MuJoCo X1 仿真 (FastLIO2 + 3D VoxelLayer + MPPI)
 # ============================================================================
 # 传感器: /cloud_registered_body (FastLIO2, PointCloud2, body系)
-# TF 链: map -> odom -> base_footprint -> base_link
-#   - map -> odom: AMCL 动态发布 (校正 FastLIO2 漂移)
-#   - odom -> base_footprint: odom_bridge.py (FastLIO2 /Odometry 转换)
-#   - base_footprint -> base_link: 静态 TF (Z=0.86m, tf_bridge.launch.py)
-# 定位: AMCL 用 /scan (pc2scan 从点云切片) 在地图中做全局定位
-# 里程计: odom_bridge.py 发布 /odom (含速度, 从 FastLIO2 /Odometry 透传)
-# 全局地图: lab_env_map.yaml (从 lab_env.xml 自动生成)
-# 坐标系: odom 系地面 Z=0, base_link Z≈0.86m, 墙壁 Z=0~2.8m
-# 控制器: 纯 MPPI (无 RotationShim, 人形不适合硬原地旋转)
+# TF 链: map -> odom -> base_link -> lidar_link
+#   - odom->base_link : sim2sim_nav.py 发布 (imu site 位置)
+#   - base_link->lidar_link : sim2sim_nav.py 静态TF
+#   - map->odom : FAST_LIO2 提供 (需启动 fast_lio mapping 节点)
+# 里程计: sim2sim_nav.py 发布 odom→base_link TF
+# 全局地图: mujoco.yaml (FAST_LIO2 建图后转换的 2D 栅格地图)
+# 坐标系说明: FAST_LIO2 初始化 lidar 在 Z=0,
+#   base_link(骨盆) ≈ -0.45m, 地面 ≈ -1.25m (odom系)
+# 注意: ObstacleCritic 有 bug, 用 CostCritic 替代
 # ============================================================================
 
-# --- AMCL (全局定位, 校正 FastLIO2 漂移) ---
+# --- AMCL (阶段5启用, 当前由 tf_bridge 静态 map->odom 代替) ---
 amcl:
   ros__parameters:
     use_sim_time: True
-    alpha1: 0.2                    # odom 旋转噪声
-    alpha2: 0.2                    # odom 平移→旋转噪声
-    alpha3: 0.2                    # odom 平移噪声
-    alpha4: 0.2                    # odom 旋转→平移噪声
-    alpha5: 0.2                    # 额外旋转噪声
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
     base_frame_id: "base_footprint"
     global_frame_id: "map"
     odom_frame_id: "odom"
-    scan_topic: "/scan"            # pc2scan 从 /cloud_registered_body 切割输出
+    scan_topic: "/scan"               # 阶段5: pc2scan 输出
     robot_model_type: "nav2_amcl::DifferentialMotionModel"
-    tf_broadcast: True             # ← 动态发布 map→odom, 校正漂移
-    set_initial_pose: true         # ← 启动即赋初值
-    initial_pose: [0.0, 0.0, 0.0, 0.0]   # 仿真起点 (x, y, z, yaw)
-    min_particles: 500
-    max_particles: 2000
-    laser_max_range: 8.0
-    laser_min_range: 0.3
-    recovery_alpha_slow: 0.001     # 全局重定位 (防绑架)
-    recovery_alpha_fast: 0.1       # 局部重定位
+    tf_broadcast: False
+    # set_initial_pose: true            # 极其重要：启动即赋初值，防止由于等待位姿导致 TF 断裂
+    # initial_pose: [0.0, 0.0, 0.0, 0.0] # 初始位姿 (x, y, z, yaw) 根据仿真起始点修改
 
 # --- 行为树导航器 ---
 bt_navigator:
@@ -44,21 +38,18 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_link
     odom_topic: /odom
-    bt_loop_duration: 10
+    bt_loop_duration: 20
     default_server_timeout: 20
 
 # --- 控制器服务器 (MPPI) ---
 controller_server:
   ros__parameters:
     use_sim_time: True
-    controller_frequency: 10.0          # 20→10: 低RTF下降低控制频率，给MPPI更多计算时间
-    # cmd_vel 由 Nav2 默认发到 /cmd_vel, odom_bridge.py relay 转发到 /cmd_vel_limiter
-    # 不在此设置 cmd_vel_topic, 避免与 relay 冲突产生双写
+    controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
-    min_y_velocity_threshold: 0.001  # 0.5→0.001: 不忽略任何横向速度
+    min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.5
-    transform_tolerance: 5.0          # ← 新增: 仿真 sim_time 跳变容忍
+    failure_tolerance: 2.0
     odom_topic: /odom
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
@@ -75,42 +66,47 @@ controller_server:
       yaw_goal_tolerance: 0.35
       stateful: True
 
-    # ---- MPPI 控制器 (直接使用, 无 RotationShim) ----
-    # RotationShimController 对人形机器人做硬原地旋转, RL 步态策略无法处理
-    # 纯角速度 (vx=0, wz=0.4) → 步态变形 → 摔倒
-    # MPPI 通过轨迹采样自然产生弧线转弯, 对人形更安全
+    # ---- RotationShimController 包装 MPPI ----
+    # 目标在身后时：检测机器人朝向与路径角度差，超过 angular_dist_threshold 先原地旋转对齐，再交给 MPPI
     FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 16
-      model_dt: 0.1
-      batch_size: 200
-      vx_std: 0.2
-      vy_std: 0.0
-      wz_std: 0.4
-      vx_max: 0.3
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      angular_dist_threshold: 2.785  # ~160°：仅目标几乎在正后方时触发原地旋转，其余转向交给 MPPI 走弧形，避免走廊提前拐弯
+      forward_sampling_distance: 1.5   # 0.5 → 1.5：目标在身后时路径弯曲，0.5m采样点角度不稳定，扩大采样距离使 Shim 触发更可靠
+      rotate_to_heading_angular_vel: 0.4   # 与 wz_max 一致
+      max_angular_accel: 2.0
+      simulate_ahead_time: 1.0
+      time_steps: 32
+      model_dt: 0.1                   # 与 controller_frequency=10Hz 的控制周期(100ms)匹配，MPPI 要求 model_dt ≥ 控制周期
+      batch_size: 600
+      vx_std: 0.15
+      vy_std: 0.0                     # 差速模型不需要 Y 方向采样
+      wz_std: 0.4               # 提供足够旋转采样空间以纠正朝向偏差
+      vx_max: 0.5                     # MuJoCo X1 安全步行速度上限
       vx_min: -0.1
       vy_max: 0.0
-      wz_max: 0.4
+      wz_max: 0.4                     # 严格限制转速，人形机器人稳定上限；>0.4易步态失稳
       iteration_count: 1
-      prune_distance: 1.7
-      transform_tolerance: 1.0
-      temperature: 0.5
+      prune_distance: 0.8
+      transform_tolerance: 0.5        # 增大(原0.1), 适配低RTF下TF延迟
+      temperature: 0.3               # 降低探索随机性，提高路径跟随精度
       gamma: 0.015
       motion_model: "DiffDrive"
 
-      # 加速度限制
-      ax_max: 2.0
-      ax_min: -2.0
-      az_max: 2.0
+      # 加速度限制 — 人形机器人保守设置
+      ax_max: 1.5
+      ax_min: -1.5
+      az_max: 1.0
 
       visualize: true
 
-      # 评分标准
+      # 评分标准 — 不用 ObstacleCritic(有bug), 用 CostCritic 替代
       critics: [
         "ConstraintCritic",
         "GoalCritic",
         "GoalAngleCritic",
         "PathAlignCritic",
+        "PathAngleCritic",
         "PathFollowCritic",
         "PreferForwardCritic",
         "CostCritic"
@@ -135,8 +131,16 @@ controller_server:
         cost_weight: 14.0
         cost_power: 1
         threshold_to_consider: 0.5
-        offset_from_furthest: 20
+        offset_from_furthest: 10
         use_path_orientations: false
+      PathAngleCritic:
+        enabled: true
+        cost_weight: 3.5            # 引导转向方向与路径前进方向一致，防止选错转向 3.0
+        cost_power: 1
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 0.7  # ~40°：提前介入，50°偏差即触发纠偏，防止斜角进入窄通道 0.7
+        mode: 0                     # forward_preference：差速驱动前向优先
       PathFollowCritic:
         enabled: true
         cost_weight: 5.0
@@ -145,13 +149,13 @@ controller_server:
         threshold_to_consider: 1.4
       PreferForwardCritic:
         enabled: true
-        cost_weight: 4.0             # 2.0→4.0: 无 Shim, 恢复正向偏好
+        cost_weight: 2.0             # 8.0 → 2.0：Shim 已处理初始旋转，无需过强限制
         cost_power: 1
         threshold_to_consider: 0.5
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 15.0              # 5→15: 强化避障, 压制 PathAlign(14) 的沿墙倾向
+        cost_weight: 3.5
         critical_cost: 300.0
         collision_cost: 1000000.0
         consider_footprint: false
@@ -168,11 +172,11 @@ local_costmap:
       robot_base_frame: base_link
       use_sim_time: True
       rolling_window: true
-      width: 6                         # 4→6: 给 MPPI 更多前方视野
-      height: 6
+      width: 4
+      height: 4
       resolution: 0.05
-      robot_radius: 0.15
-      transform_tolerance: 5.0        # 0.5→5.0: sim_time 跳变 + AMCL 低频
+      robot_radius: 0.3
+      transform_tolerance: 0.5   # 允许TF时间戳偏差，防止点云被丢弃
 
       plugins: ["voxel_layer", "denoise_layer", "inflation_layer"]
 
@@ -181,11 +185,11 @@ local_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
         publish_voxel_map: True        # 调试时开启, RViz 中可看 3D 体素
-        origin_z: -0.2                 # odom 系中地面 Z≈0，从 -0.2 开始覆盖
+        origin_z: -1.4                 # MuJoCo: lidar在odom Z=0, base_link≈-0.45m, 地面≈-1.25m
         z_resolution: 0.1
-        z_voxels: 30                   # 30层×0.1m=3.0m，覆盖[-0.2m, 2.8m]全高度
-        max_obstacle_height: 2.5       # 保留墙壁全高 (地面0m→天花板2.8m)
-        min_obstacle_height: 0.05      # 排除地面噪声 (Z<0.05m 的点丢弃)
+        z_voxels: 25                   # 25层×0.1m=2.5m，覆盖[-1.4m, 1.1m]，传感器origin Z≈0.87m在界内
+        max_obstacle_height: 0.2       # 0.2m ≈ 地面(-1.25m)+1.45m障碍物顶部
+        min_obstacle_height: -1.1      # -1.0m ≈ 地面(-1.25m)+0.25m，跳过地面噪声
         mark_threshold: 2              # # 体素列中至少 2 个点才标记障碍（单个散射噪点不再触发）
         unknown_threshold: 15
         combination_method: 1          # 1=overwrite, 每次更新直接覆盖而非累积
@@ -196,8 +200,8 @@ local_costmap:
         cloud_mark:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 2.5
-          min_obstacle_height: 0.05
+          max_obstacle_height: 0.2
+          min_obstacle_height: -1.1
           clearing: False
           marking: True
           obstacle_max_range: 5.0
@@ -205,12 +209,12 @@ local_costmap:
         cloud_clear:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 2.5
-          min_obstacle_height: 0.05
+          max_obstacle_height: 0.2
+          min_obstacle_height: -1.1
           clearing: True
           marking: False
           raytrace_max_range: 6.0
-          raytrace_min_range: 0.8     # 仅在 0.8m 以外执行清除，盲区内不清除
+          raytrace_min_range: 1.2     # 仅在 0.8m 以外执行清除，盲区内不清除
 
       denoise_layer:
         plugin: "nav2_costmap_2d::DenoiseLayer"
@@ -220,8 +224,8 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0       # 10→3: 缓梯度, 机器人从更远处"感受"墙壁
-        inflation_radius: 0.5          # 0.35→0.5: RL 步态有±0.2m漂移, 需更大缓冲
+        cost_scaling_factor: 4.0      # 10.0 → 4.0：降低梯度陡峭度，防止MPPI在狭窄通道产生高频振荡wz指令导致摔倒
+        inflation_radius: 0.7         # 0.6 → 0.7：增大膨胀半径，使机器人远离高障碍物盲区边缘
 
 # ==================== 全局代价地图 ====================
 global_costmap:
@@ -232,54 +236,60 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: True
-      robot_radius: 0.15             # 0.2→0.15: 与局部costmap一致
+      robot_radius: 0.3
       resolution: 0.05
       track_unknown_space: false
-      transform_tolerance: 5.0        # 0.5→5.0: 与局部一致
+      transform_tolerance: 0.5   # 允许TF时间戳偏差，防止点云被丢弃
 
-      plugins: ["static_layer", "inflation_layer"]  # "voxel_layer", 
+      plugins: ["static_layer", "voxel_layer", "denoise_layer", "inflation_layer"]
 
       # 静态地图层 (mujoco.yaml: FAST_LIO2 建图后用 octomap/pcd2pgm 转换)
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
 
-      # 3D 体素层: 实时障碍物检测
-      # voxel_layer:
-      #   plugin: "nav2_costmap_2d::VoxelLayer"
-      #   enabled: True
-      #   publish_voxel_map: False
-      #   origin_z: -1.4
-      #   z_resolution: 0.1
-      #   z_voxels: 25   # 25层×0.1m=2.5m，覆盖[-1.4m, 1.1m]，传感器origin Z≈0.87m在界内
-      #   max_obstacle_height: 0.2   # 地面(-1.25m)+1.45m障碍物
-      #   min_obstacle_height: -0.9  # 地面(-1.25m)+0.25m，跳过地面噪声
-      #   mark_threshold: 2
-      #   unknown_threshold: 15
-      #   combination_method: 1  ##
-      #   observation_sources: pointcloud
-      #   pointcloud:
-      #     topic: /cloud_registered_body
-      #     data_type: "PointCloud2"
-      #     max_obstacle_height: 0.2
-      #     min_obstacle_height: -0.9
-      #     clearing: True
-      #     marking: True
-      #     obstacle_max_range: 8.0
-      #     obstacle_min_range: 0.3
-      #     raytrace_max_range: 10.0
-      #     raytrace_min_range: 0.3
+      # 3D 体素层: 实时障碍物检测，使全局规划器感知动态障碍物，避免规划穿越已被堵住的通道
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: True
+        publish_voxel_map: False
+        origin_z: -1.4
+        z_resolution: 0.1
+        z_voxels: 25
+        max_obstacle_height: 0.2
+        min_obstacle_height: -1.0
+        mark_threshold: 3          # 2→3：提高噪点过滤门槛，减少全局代价地图噪点
+        unknown_threshold: 15
+        combination_method: 1
+        observation_sources: pointcloud
+        pointcloud:
+          topic: /cloud_registered_body
+          data_type: "PointCloud2"
+          max_obstacle_height: 0.2
+          min_obstacle_height: -1.0
+          clearing: True
+          marking: True
+          obstacle_max_range: 8.0
+          obstacle_min_range: 0.3
+          raytrace_max_range: 10.0
+          raytrace_min_range: 0.8      # 防止近距离射线清除墙体体素引发重规划恶性循环
+
+      denoise_layer:
+        plugin: "nav2_costmap_2d::DenoiseLayer"
+        enabled: true
+        minimal_group_size: 3
+        group_connectivity_type: 8
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.35         # 0.55→0.35: passage A 宽0.80m, 致命区0.2m*2=0.4m, 留0.4m通道
+        inflation_radius: 0.7        # 0.55 → 0.65：缩小与局部地图(0.7)的差距，减少全局/局部规划分裂，同时保留局部安全边际
 
 # --- 地图服务器 ---
 map_server:
   ros__parameters:
     use_sim_time: True
-    yaml_filename: "lab_env_map.yaml"  # 从 lab_env.xml 几何体自动生成
+    yaml_filename: "mujoco_lab.yaml"         # FAST_LIO2 建图后转换的 2D 栅格地图
 
 # --- 全局规划器 ---
 planner_server:
@@ -291,3 +301,16 @@ planner_server:
       tolerance: 0.5
       use_astar: false
       allow_unknown: true
+
+# --- Lifecycle Manager (缩短 bond 超时，加速 Ctrl+C 关闭) ---
+lifecycle_manager_navigation:
+  ros__parameters:
+    use_sim_time: True
+    autostart: True
+    bond_timeout: 2.0        # 默认 4.0s，缩短为 2s，避免 Ctrl+C 卡住
+
+lifecycle_manager_localization:
+  ros__parameters:
+    use_sim_time: True
+    autostart: True
+    bond_timeout: 2.0

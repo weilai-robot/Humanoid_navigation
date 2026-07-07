@@ -2,9 +2,8 @@
 TF 桥接 Launch 文件
 启动内容：
   1. odom_bridge 节点 — 将 FastLIO2 的 /Odometry 转换为 odom->base_footprint TF
-  2. (已移除) map -> odom 静态 TF — AMCL 动态发布
-  3. 静态TF: odom -> camera_init — 连接 odom 树和 FastLIO2 树
-  4. 静态TF: base_footprint -> base_link
+  2. 静态TF: map -> odom（初始为单位变换，后续 AMCL 接管）
+  3. 静态TF: map -> camera_init（FastLIO2/OctoMap 使用）
 """
 
 from launch import LaunchDescription
@@ -22,40 +21,33 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'use_sim_time': True,
-                'body_to_footprint_z': -1.31,   # body(雷达/IMU处) 到 base_footprint(地面) 的Z偏移
+                'body_to_footprint_z': -1.25,   # body(雷达/IMU处) 到 base_footprint(地面) 的Z偏移 (X1 LiDAR高度≈1.25m)
                 'odom_frame': 'odom',
                 'base_frame': 'base_footprint',
                 'input_topic': '/Odometry',      # FastLIO2 发布的里程计话题
             }]
         ),
 
-        # ---- 2. (已移除) map -> odom 静态 TF ----
-        # AMCL 已启用 (tf_broadcast=True), 会动态发布 map→odom。
-        # 如果保留此静态 TF, 会与 AMCL 的动态 TF 冲突。
+        # ---- 2. 静态TF: map -> odom (初始为单位变换) ----
+        # 后续阶段5 AMCL 启动后，由 AMCL 动态发布 map->odom，届时注释掉此行
+        # Node(
+        #     package='tf2_ros',
+        #     executable='static_transform_publisher',
+        #     name='tf_map_to_odom',
+        #     parameters=[{'use_sim_time': True}],
+        #     arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
+        # ),
 
-        # ---- 3. 静态TF: odom -> camera_init ----
-        # 连接 odom 树和 FastLIO2 树, 解决 TF 死锁
-        # (之前 map→camera_init + AMCL→map→odom 导致两棵树不连通)
-        # camera_init 在雷达高度 (1.31m), odom 在地面 (0m)
+        # ---- 3. 静态TF: map -> camera_init (FastLIO2 的世界坐标系) ----
+        # FastLIO2 和 OctoMap 使用 camera_init 作为全局参考系
+        # camera_init 在 X1 LiDAR 高度(1.25m)处初始化, 不在地面
+        # map z=0 对应 car 建图时 LiDAR 高度(0.20m), 故 camera_init 在 map 中 z = 1.25 - 0.20 = 1.05m
+        # 必须加上高度偏移, 否则 VoxelLayer 的传感器原点会在 Z=0 (地面), 导致 raytrace 失败
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
-            name='tf_odom_to_camera_init',
+            name='tf_map_to_camera_init',
             parameters=[{'use_sim_time': True}],
-            arguments=['0', '0', '1.31', '0', '0', '0', 'odom', 'camera_init']
-        ),
-
-        # ---- 4. 静态TF: base_footprint -> base_link ----
-        # 正常应由 URDF/robot_state_publisher 发布，但 navigation.launch.py 未启动它，
-        # 导致 base_link 不存在，Costmap/Controller (robot_base_frame=base_link) 报
-        # "invalid frame id base_link" 并拒绝导航目标。
-        # base_footprint 是 base_link(骨盆)在地面的投影：x=y=0、无旋转，
-        # Z≈0.86m (base_link 在 odom≈-0.45m, base_footprint 在 odom≈-1.31m)。
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='tf_footprint_to_base_link',
-            parameters=[{'use_sim_time': True}],
-            arguments=['0', '0', '0.86', '0', '0', '0', 'base_footprint', 'base_link']
+            arguments=['0', '0', '1.05', '0', '0', '0', 'map', 'camera_init']
         ),
     ])
