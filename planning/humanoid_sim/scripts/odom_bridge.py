@@ -20,13 +20,10 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import TransformStamped, Twist
+from geometry_msgs.msg import TransformStamped
 from tf2_ros import TransformBroadcaster
-import math
-# 注意: 不要 import numpy / scipy。
-# 在本机 conda 环境里 numpy/scipy 首次导入极慢(常卡在 numpy.ma 等),
-# 会拖慢 odom_bridge 启动、连带整个 navigation.launch 易被中断。
-# 这里仅用标准库 math 做四元数运算, 等价替换原 scipy.spatial.transform.Rotation。
+import numpy as np
+from scipy.spatial.transform import Rotation
 
 
 class OdomBridge(Node):
@@ -78,32 +75,13 @@ class OdomBridge(Node):
             Odometry, input_topic, self.odom_callback, qos
         )
 
-        # --- cmd_vel 转发: /cmd_vel -> /cmd_vel_limiter ---
-        # Nav2 controller_server/velocity_smoother 最终把速度发到 /cmd_vel
-        # (controller_server 的 cmd_vel_topic 参数在标准 Nav2 中被忽略, 硬编码为 cmd_vel),
-        # 而 control_module 只订阅 /cmd_vel_limiter (rl_x1_sim.yaml: sub_joy_vel_name)。
-        # 在此直接转发, 避免依赖 topic_tools (robostack/conda 常未安装)。
-        self.declare_parameter('cmd_vel_in', '/cmd_vel')
-        self.declare_parameter('cmd_vel_out', '/cmd_vel_limiter')
-        cmd_in = self.get_parameter('cmd_vel_in').value
-        cmd_out = self.get_parameter('cmd_vel_out').value
-        self.cmd_vel_pub = self.create_publisher(Twist, cmd_out, 10)
-        self.cmd_vel_sub = self.create_subscription(
-            Twist, cmd_in, self._cmd_vel_relay_cb, 10
-        )
-
         self.get_logger().info(
             f'OdomBridge 启动:\n'
             f'  输入: {input_topic}\n'
             f'  输出TF: {self.odom_frame} -> {self.base_frame}\n'
             f'  输出话题: {output_topic}\n'
-            f'  cmd_vel 转发: {cmd_in} -> {cmd_out}\n'
             f'  Z偏移: {self.body_to_footprint_z}m'
         )
-
-    def _cmd_vel_relay_cb(self, msg: Twist):
-        """把 Nav2 的 /cmd_vel 原样转发到运动控制订阅的 /cmd_vel_limiter。"""
-        self.cmd_vel_pub.publish(msg)
 
     def odom_callback(self, msg: Odometry):
         """
@@ -122,16 +100,10 @@ class OdomBridge(Node):
         # 将 body->base_footprint 的偏移（在 body 局部坐标系下）转换到世界坐标系
         # body 到 base_footprint 在 body 局部坐标系下 is (0, 0, -1.31)
         # 需要用 body 的旋转矩阵将其旋转到世界坐标系
-        # 用四元数 (x,y,z,w) 旋转局部向量 [0, 0, body_to_footprint_z] 到世界系。
-        # 旋转矩阵第三列即为对 [0,0,1] 的旋转结果, 乘以 z 偏移即可:
-        #   R[:,2] = [2(xz+wy), 2(yz-wx), 1-2(x^2+y^2)]
-        qx, qy, qz, qw = ori.x, ori.y, ori.z, ori.w
-        zoff = self.body_to_footprint_z
-        world_offset = (
-            zoff * 2.0 * (qx * qz + qw * qy),
-            zoff * 2.0 * (qy * qz - qw * qx),
-            zoff * (1.0 - 2.0 * (qx * qx + qy * qy)),
-        )
+        quat = [ori.x, ori.y, ori.z, ori.w]
+        rot = Rotation.from_quat(quat)
+        local_offset = np.array([0.0, 0.0, self.body_to_footprint_z])
+        world_offset = rot.apply(local_offset)
 
         # base_footprint 在 odom 坐标系下的位置
         footprint_x = pos.x + world_offset[0]
@@ -141,15 +113,17 @@ class OdomBridge(Node):
         # 减去 body_to_footprint_z（即 +1.31）将 odom 系的初始平面拉回地面 Z=0
         footprint_z = pos.z + world_offset[2] - self.body_to_footprint_z
 
-        stamp = msg.header.stamp
+        # 使用当前仿真时间而非 FastLIO2 消息时间作为 TF 时间戳
+        # FastLIO2 处理+传输有 ~20-30ms 延迟，若用 msg.header.stamp 会导致 Nav2 控制器
+        # 查询"当前时刻"的 TF 时出现 ExtrapolationError，进而触发重规划风暴
+        stamp = self.get_clock().now().to_msg()
 
         
         # 强制 base_footprint 只保留 Yaw 角 (抹平 Pitch 和 Roll 以满足 Nav2 平面代价地图要求)
-        # 从四元数提取 yaw (绕 Z), 再用纯 yaw 生成扁平四元数 (roll=pitch=0)
-        yaw = math.atan2(2.0 * (qw * qz + qx * qy),
-                         1.0 - 2.0 * (qy * qy + qz * qz))
-        half = yaw * 0.5
-        flat_quat = [0.0, 0.0, math.sin(half), math.cos(half)]  # (x, y, z, w)
+        r = Rotation.from_quat([ori.x, ori.y, ori.z, ori.w])
+        euler = r.as_euler('xyz', degrees=False)
+        yaw = euler[2]
+        flat_quat = Rotation.from_euler('xyz', [0, 0, yaw]).as_quat()
 
         # ========== 1. 广播 TF: odom -> base_footprint ==========
         t = TransformStamped()
@@ -189,8 +163,25 @@ class OdomBridge(Node):
         odom_msg.pose.covariance = msg.pose.covariance  # 保留原始协方差
 
         # 速度：直接转发 FastLIO2 的速度（body 系下的速度 ≈ base_footprint 系下的速度）
-        # Nav2 MPPI 需要准确的当前速度做轨迹预测，EMA 滤波会导致反馈滞后
-        odom_msg.twist = msg.twist
+        # TODO 以后换成人形机器人可能要进行修改，重新计算雷达位置到base_footprint的速度映射
+        # odom_msg.twist = msg.twist
+
+        # 速度：平滑滤波 (EMA 滤波，过滤高频抖动)
+        raw_tw = msg.twist.twist
+        self.filtered_twist_linear_x = self.alpha_v * raw_tw.linear.x + (1 - self.alpha_v) * self.filtered_twist_linear_x
+        self.filtered_twist_linear_y = self.alpha_v * raw_tw.linear.y + (1 - self.alpha_v) * self.filtered_twist_linear_y
+        self.filtered_twist_linear_z = self.alpha_v * raw_tw.linear.z + (1 - self.alpha_v) * self.filtered_twist_linear_z
+        self.filtered_twist_angular_x = self.alpha_v * raw_tw.angular.x + (1 - self.alpha_v) * self.filtered_twist_angular_x
+        self.filtered_twist_angular_y = self.alpha_v * raw_tw.angular.y + (1 - self.alpha_v) * self.filtered_twist_angular_y
+        self.filtered_twist_angular_z = self.alpha_v * raw_tw.angular.z + (1 - self.alpha_v) * self.filtered_twist_angular_z
+
+        odom_msg.twist.twist.linear.x = self.filtered_twist_linear_x
+        odom_msg.twist.twist.linear.y = self.filtered_twist_linear_y
+        odom_msg.twist.twist.linear.z = self.filtered_twist_linear_z
+        odom_msg.twist.twist.angular.x = self.filtered_twist_angular_x
+        odom_msg.twist.twist.angular.y = self.filtered_twist_angular_y
+        odom_msg.twist.twist.angular.z = self.filtered_twist_angular_z
+        odom_msg.twist.covariance = msg.twist.covariance
 
         self.odom_pub.publish(odom_msg)
 
