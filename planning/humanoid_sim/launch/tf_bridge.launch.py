@@ -50,4 +50,24 @@ def generate_launch_description():
             parameters=[{'use_sim_time': True}],
             arguments=['0', '0', '1.05', '0', '0', '0', 'map', 'camera_init']
         ),
+
+        # ---- 4. 静态TF: base_footprint -> base_link ----
+        # MuJoCo navigation does not launch simulation.launch.py, so robot_state_publisher
+        # is not running to publish the fixed joints from robot.xacro.
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='tf_base_footprint_to_base_link',
+            parameters=[{'use_sim_time': True}],
+            arguments=['0', '0', '0.65', '0', '0', '0', 'base_footprint', 'base_link']
+        ),
+
+        # ---- 5. 静态TF: base_link -> lidar_link ----
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='tf_base_link_to_lidar_link',
+            parameters=[{'use_sim_time': True}],
+            arguments=['0', '0', '0.66', '1', '0', '0', '0', 'base_link', 'lidar_link']
+        ),
     ])
