@@ -14,6 +14,10 @@ find_package(ament_cmake REQUIRED)
 # 安装 Python 脚本为可执行节点
 install(PROGRAMS
   scripts/odom_bridge.py
+  scripts/mujoco_lidar_bridge.py
+  scripts/leg_odom_node.py
+  scripts/generate_map_from_xml.py
+  scripts/generate_nav_map.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
@@ -23,6 +27,7 @@ install(DIRECTORY
   worlds
   config
   maps
+  rviz_cfg
   DESTINATION share/${PROJECT_NAME}
 )
 
