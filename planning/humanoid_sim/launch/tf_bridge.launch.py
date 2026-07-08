@@ -29,15 +29,16 @@ def generate_launch_description():
         ),
 
         # ---- 2. 静态TF: map -> odom (初始为单位变换) ----
-        # nav2_mujoco.yaml disables AMCL TF broadcasting, so MuJoCo navigation
-        # needs this static transform to connect map and odom trees.
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='tf_map_to_odom',
-            parameters=[{'use_sim_time': True}],
-            arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
-        ),
+        # 如果你接入 ICP / AMCL 动态发布 map->odom，则需要注释掉静态 map->odom，
+        # 否则会造成 TF 来源重复（看起来能跑，但定位融合语义不干净）。
+        #
+        # Node(
+        #     package='tf2_ros',
+        #     executable='static_transform_publisher',
+        #     name='tf_map_to_odom',
+        #     parameters=[{'use_sim_time': True}],
+        #     arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
+        # ),
 
         # ---- 3. 静态TF: map -> camera_init (FastLIO2 的世界坐标系) ----
         # FastLIO2 和 OctoMap 使用 camera_init 作为全局参考系
