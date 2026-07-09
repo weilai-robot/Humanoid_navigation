@@ -38,11 +38,41 @@ find_package(PCL REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem system)
 
-# Set Open3D path - modify this to your installation path
-set(Open3D_DIR "/home/hmj/humanoid_ws/open3d141/lib/cmake/Open3D")
+# ===========================================================================
+# Open3D 自动检测 (支持 pip install open3d 或 CMake 原生安装)
+# 优先级: 环境变量 Open3D_DIR > pip 包自动探测 > CMake 默认搜索
+#
+# 用法:
+#   方式 A (推荐): pip install open3d  →  自动探测
+#   方式 B: export Open3D_DIR=/path/to/open3d/lib/cmake/Open3D  →  手动指定
+# ===========================================================================
+if(DEFINED ENV{Open3D_DIR})
+    # 方式 B: 用户通过环境变量显式指定
+    set(Open3D_DIR "$ENV{Open3D_DIR}")
+    message(STATUS "Open3D: using Open3D_DIR from environment: ${Open3D_DIR}")
 
-# set(Open3D_DIR "/home/unitree/open3d141_arm/open3d141/lib/cmake/Open3D")
+else()
+    # 方式 A: 自动探测 pip 安装的 Open3D
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c
+            "import open3d, os; print(os.path.join(os.path.dirname(open3d.__file__), 'lib', 'cmake', 'Open3D'))"
+        OUTPUT_VARIABLE _open3d_cmake_dir
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _open3d_import_result
+    )
+
+    if(_open3d_import_result EQUAL 0 AND EXISTS "${_open3d_cmake_dir}/Open3DConfig.cmake")
+        set(Open3D_DIR "${_open3d_cmake_dir}")
+        message(STATUS "Open3D: auto-detected from pip package: ${Open3D_DIR}")
+    else()
+        message(STATUS "Open3D: pip package not found, falling back to CMake default search")
+    endif()
+endif()
+
 find_package(Open3D REQUIRED)
+message(STATUS "Open3D: found at ${Open3D_DIR}")
 
 # Fix Open3D libraries - remove problematic .so files
 # In Ubuntu 22.04+, some libraries (librt, libc++) have different paths or are merged
