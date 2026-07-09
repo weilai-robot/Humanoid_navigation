@@ -39,32 +39,35 @@ find_package(OpenCV REQUIRED)
 find_package(Boost REQUIRED COMPONENTS filesystem system)
 
 # ===========================================================================
-# Open3D 自动检测 (支持 pip install open3d 或 CMake 原生安装)
-# 优先级: 环境变量 Open3D_DIR > pip 包自动探测 > CMake 默认搜索
+# Open3D 自动检测 (4 层 fallback)
+# 优先级: 环境变量 Open3D_DIR > ~/open3d_install (C++ 预编译包约定路径)
+#         > pip 包自动探测 (仅 0.18 及以下) > CMake 默认搜索
 #
-# 用法:
-#   方式 A (推荐): pip install open3d  →  自动探测
-#   方式 B: export Open3D_DIR=/path/to/open3d/lib/cmake/Open3D  →  手动指定
+# pip open3d >= 0.19 不再包含 C++ CMake 配置文件，需单独下载 devel 包:
+#   wget https://github.com/isl-org/Open3D/releases/download/v0.19.0/open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz
+#   mkdir -p ~/open3d_install
+#   tar xf open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz -C ~/open3d_install --strip-components=1
 # ===========================================================================
 if(DEFINED ENV{Open3D_DIR})
-    # 方式 B: 用户通过环境变量显式指定
+    # 方式 1: 用户通过环境变量显式指定
     set(Open3D_DIR "$ENV{Open3D_DIR}")
     message(STATUS "Open3D: using Open3D_DIR from environment: ${Open3D_DIR}")
 
+elseif(EXISTS "$ENV{HOME}/open3d_install/lib/cmake/Open3D/Open3DConfig.cmake")
+    # 方式 2: 约定路径 ~/open3d_install (C++ 预编译包解压到此)
+    set(Open3D_DIR "$ENV{HOME}/open3d_install/lib/cmake/Open3D")
+    message(STATUS "Open3D: using conventional path ~/open3d_install")
+
 else()
-    # 方式 A: 自动探测 pip 安装的 Open3D
-    # 不用 find_package(Python3) — conda+ROS2 环境下它可能找到错误的 Python。
-    # 直接用 PATH 中的 python3 (构建时已激活 conda env, 即装了 open3d 的那个)。
+    # 方式 3: 自动探测 pip 安装的 Open3D (仅 0.18 及以下版本有 CMake 文件)
     set(_open3d_script
         "import open3d, os, sys, glob;"
         "pkg_dir=os.path.dirname(open3d.__file__);"
         "print('PYTHON:'+sys.executable);"
         "print('PKGDIR:'+pkg_dir);"
-        # 标准 pip 包路径
         "cm=os.path.join(pkg_dir,'lib','cmake','Open3D');"
         "print('CMAKEDIR:'+cm);"
         "print('EXISTS:'+str(os.path.isfile(os.path.join(cm,'Open3DConfig.cmake'))));"
-        # 如果标准路径不存在, 用 glob 搜整个包目录
         "if not os.path.isfile(os.path.join(cm,'Open3DConfig.cmake')):"
         "  hits=glob.glob(os.path.join(pkg_dir,'**','Open3DConfig.cmake'),recursive=True);"
         "  print('GLOB_HITS:'+str(hits));"
@@ -80,21 +83,17 @@ else()
         RESULT_VARIABLE _open3d_import_result
     )
 
-    # 打印完整诊断 (帮助排查)
     message(STATUS "Open3D diagnostic (exit=${_open3d_import_result}):\n${_open3d_diag}")
     if(_open3d_err AND NOT _open3d_err STREQUAL "")
         message(STATUS "Open3D stderr: ${_open3d_err}")
     endif()
 
-    # 从诊断输出中提取 CMake 目录
     set(_open3d_cmake_dir "")
     if(_open3d_import_result EQUAL 0)
-        # 优先取 CMAKE_FALLBACK (glob 搜到的)
         string(REGEX MATCH "CMAKE_FALLBACK:([^\n]+)" _match "${_open3d_diag}")
         if(CMAKE_MATCH_1)
             set(_open3d_cmake_dir "${CMAKE_MATCH_1}")
         else()
-            # 取标准路径, 但要检查 EXISTS:true
             string(REGEX MATCH "EXISTS:True" _exists "${_open3d_diag}")
             if(_exists)
                 string(REGEX MATCH "CMAKEDIR:([^\n]+)" _match "${_open3d_diag}")
@@ -109,13 +108,13 @@ else()
         set(Open3D_DIR "${_open3d_cmake_dir}")
         message(STATUS "Open3D: auto-detected from pip package: ${Open3D_DIR}")
     else()
-        message(WARNING
-            "Open3D: auto-detection failed.\n"
-            "  Possible causes:\n"
-            "    1. pip open3d not installed in the build-time Python (try: python3 -c 'import open3d')\n"
-            "    2. pip open3d version has no C++ CMake files (C++ dev package needed)\n"
-            "  Fix: export Open3D_DIR=/path/to/open3d/lib/cmake/Open3D before building\n"
-            "       or: pip install open3d==0.18.0 (ensures CMake configs included)"
+        message(FATAL_ERROR
+            "Open3D: not found!\n"
+            "  pip open3d 0.19+ 不含 C++ CMake 文件，需下载 C++ 开发包:\n"
+            "    wget https://github.com/isl-org/Open3D/releases/download/v0.19.0/open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz\n"
+            "    mkdir -p ~/open3d_install\n"
+            "    tar xf open3d-devel-linux-x86_64-cxx11-abi-0.19.0.tar.xz -C ~/open3d_install --strip-components=1\n"
+            "  然后重新构建。或手动指定: export Open3D_DIR=/path/to/lib/cmake/Open3D"
         )
     endif()
 endif()
