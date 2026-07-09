@@ -2,6 +2,7 @@
 TF 桥接 Launch 文件
 启动内容：
   1. odom_bridge 节点 — 将 FastLIO2 的 /Odometry 转换为 odom->base_footprint TF
+     + cmd_vel relay: /cmd_vel → /cmd_vel_limiter (加速度限幅)
   2. 静态TF: map -> odom（初始为单位变换，后续 AMCL 接管）
   3. 静态TF: map -> camera_init（FastLIO2/OctoMap 使用）
 """
@@ -14,6 +15,7 @@ def generate_launch_description():
     return LaunchDescription([
 
         # ---- 1. odom_bridge: FastLIO2 Odometry -> odom->base_footprint TF ----
+        #        + cmd_vel relay: /cmd_vel -> /cmd_vel_limiter (加速度限幅)
         Node(
             package='humanoid_sim',
             executable='odom_bridge.py',
@@ -25,6 +27,14 @@ def generate_launch_description():
                 'odom_frame': 'odom',
                 'base_frame': 'base_footprint',
                 'input_topic': '/Odometry',      # FastLIO2 发布的里程计话题
+                # cmd_vel 加速度限幅中继 (Nav2 /cmd_vel → aimrt_main /cmd_vel_limiter)
+                # 参数与 nav2_mujoco.yaml 中 MPPI ax_max/az_max 对齐
+                'enable_cmd_vel_relay': True,
+                'cmd_vel_input_topic': '/cmd_vel',
+                'cmd_vel_output_topic': '/cmd_vel_limiter',
+                'max_ax': 1.5,    # m/s²  (MPPI ax_max=1.5)
+                'max_ay': 0.5,    # m/s²  (侧步保守值，DiffDrive vy=0 不触发)
+                'max_az': 2.0,    # rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常)
             }]
         ),
 

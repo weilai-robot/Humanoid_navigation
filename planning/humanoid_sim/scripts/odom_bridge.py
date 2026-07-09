@@ -1,29 +1,96 @@
 #!/usr/bin/env python3
 """
-TF + Odometry 桥接节点：
+TF + Odometry + cmd_vel 桥接节点：
   1. 将 FastLIO2 的 camera_init->body 位姿转换为 Nav2 标准的 odom->base_footprint TF
   2. 发布标准 nav_msgs/Odometry 话题到 /odom（携带速度信息，MPPI 控制器必需）
+  3. 中继 Nav2 /cmd_vel → aimrt_main /cmd_vel_limiter，附加加速度限幅（防速度跳变致 RL 摔倒）
 
 工作原理：
   FastLIO2 发布 /Odometry (frame: camera_init, child: body)
   本节点：
     - 广播 TF: odom -> base_footprint（Costmap、规划器等依赖）
     - 发布 /odom 话题：包含位姿 + 速度（MPPI 等局部规划器依赖 twist 做轨迹预测）
+    - 订阅 /cmd_vel (Nav2 MPPI 输出)，经 VelocityRateLimiter 限幅后发布 /cmd_vel_limiter
 
 TF 树最终结构：
   map ──(static)──> odom ──(本节点)──> base_footprint ──(URDF)──> base_link ──> lidar_link / imu_link
                      │
   map ──(static)──> camera_init ──(FastLIO2)──> body   （FastLIO2 自身的分支，OctoMap 使用）
+
+cmd_vel 链路：
+  Nav2 /cmd_vel ──(VelocityRateLimiter)──> /cmd_vel_limiter ──> aimrt_main ControlModule
+  限幅参数与 MPPI 的 ax_max/az_max 对齐（见 nav2_mujoco.yaml），不干扰正常规划，仅截断异常跳变。
 """
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Twist
 from tf2_ros import TransformBroadcaster
 import numpy as np
 from scipy.spatial.transform import Rotation
+
+
+class VelocityRateLimiter:
+    """速度变化率限制器（加速度限幅）
+
+    将 Nav2 输出的速度指令平滑到 RL 步态可跟踪的加速度范围内，
+    防止 MPPI 轨迹切换或规划器重置时产生的速度跳变冲击 RL 策略导致摔倒。
+
+    参数选择依据 (与 nav2_mujoco.yaml MPPI 配置对齐):
+      max_ax = 1.5 m/s²   — 匹配 MPPI ax_max=1.5，不干扰正常加速
+      max_ay = 0.5 m/s²   — 人形侧步保守值 (当前 DiffDrive vy=0，不触发)
+      max_az = 2.0 rad/s² — 略大于 MPPI az_max=1.0，仅截断异常跳变
+    """
+
+    def __init__(self, max_ax=1.5, max_ay=0.5, max_az=2.0):
+        self.max_ax = max_ax
+        self.max_ay = max_ay
+        self.max_az = max_az
+        self._last_vx = 0.0
+        self._last_vy = 0.0
+        self._last_wz = 0.0
+        self._last_time = None  # None 表示首帧，直接透传不限幅
+
+    def limit(self, vx, vy, wz, now_sec):
+        """对 (vx, vy, wz) 施加加速度限幅，返回限幅后的值。
+
+        Args:
+            vx, vy, wz: 目标速度 (m/s, m/s, rad/s)
+            now_sec: 当前时间戳 (秒)，应来自 ROS clock (sim time)
+        Returns:
+            (vx_limited, vy_limited, wz_limited)
+        """
+        if self._last_time is None:
+            # 首帧：记录状态，直接透传
+            self._last_vx = vx
+            self._last_vy = vy
+            self._last_wz = wz
+            self._last_time = now_sec
+            return vx, vy, wz
+
+        dt = now_sec - self._last_time
+        if dt < 1e-6:
+            # 时间戳未前进（同一周期多帧或时钟抖动），用上一帧结果
+            return self._last_vx, self._last_vy, self._last_wz
+
+        # 计算实际加速度并 clamp
+        ax = (vx - self._last_vx) / dt
+        ay = (vy - self._last_vy) / dt
+        az = (wz - self._last_wz) / dt
+
+        ax = max(-self.max_ax, min(self.max_ax, ax))
+        ay = max(-self.max_ay, min(self.max_ay, ay))
+        az = max(-self.max_az, min(self.max_az, az))
+
+        # 积分回速度
+        self._last_vx += ax * dt
+        self._last_vy += ay * dt
+        self._last_wz += az * dt
+        self._last_time = now_sec
+
+        return self._last_vx, self._last_vy, self._last_wz
 
 
 class OdomBridge(Node):
@@ -36,6 +103,14 @@ class OdomBridge(Node):
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('input_topic', '/Odometry')     # FastLIO2 的里程计话题
         self.declare_parameter('output_topic', '/odom')        # 输出的标准里程计话题
+
+        # --- cmd_vel relay 参数 ---
+        self.declare_parameter('enable_cmd_vel_relay', True)
+        self.declare_parameter('cmd_vel_input_topic', '/cmd_vel')
+        self.declare_parameter('cmd_vel_output_topic', '/cmd_vel_limiter')
+        self.declare_parameter('max_ax', 1.5)    # m/s²，匹配 MPPI ax_max
+        self.declare_parameter('max_ay', 0.5)    # m/s²，侧步保守值
+        self.declare_parameter('max_az', 2.0)    # rad/s²，略大于 MPPI az_max
 
         self.body_to_footprint_z = self.get_parameter('body_to_footprint_z').value
         self.odom_frame = self.get_parameter('odom_frame').value
@@ -75,13 +150,61 @@ class OdomBridge(Node):
             Odometry, input_topic, self.odom_callback, qos
         )
 
+        # --- cmd_vel relay: /cmd_vel → /cmd_vel_limiter (加速度限幅) ---
+        self._enable_cmd_vel_relay = self.get_parameter('enable_cmd_vel_relay').value
+        cmd_vel_input = self.get_parameter('cmd_vel_input_topic').value
+        cmd_vel_output = self.get_parameter('cmd_vel_output_topic').value
+
+        if self._enable_cmd_vel_relay:
+            max_ax = self.get_parameter('max_ax').value
+            max_ay = self.get_parameter('max_ay').value
+            max_az = self.get_parameter('max_az').value
+            self._rate_limiter = VelocityRateLimiter(max_ax, max_ay, max_az)
+            self._cmd_vel_sub = self.create_subscription(
+                Twist, cmd_vel_input, self._cmd_vel_relay_cb, 10
+            )
+            self._cmd_vel_pub = self.create_publisher(Twist, cmd_vel_output, 10)
+
         self.get_logger().info(
             f'OdomBridge 启动:\n'
             f'  输入: {input_topic}\n'
             f'  输出TF: {self.odom_frame} -> {self.base_frame}\n'
             f'  输出话题: {output_topic}\n'
             f'  Z偏移: {self.body_to_footprint_z}m'
+            + (
+                f'\n  cmd_vel relay: {cmd_vel_input} -> {cmd_vel_output}'
+                f' (max_ax={self._rate_limiter.max_ax},'
+                f' max_ay={self._rate_limiter.max_ay},'
+                f' max_az={self._rate_limiter.max_az})'
+                if self._enable_cmd_vel_relay else '\n  cmd_vel relay: DISABLED'
+            )
         )
+
+    def _cmd_vel_relay_cb(self, msg: Twist):
+        """cmd_vel 中继回调：对 Nav2 输出施加加速度限幅后转发到 /cmd_vel_limiter
+
+        限幅范围与 nav2_mujoco.yaml 中 MPPI 的 ax_max/az_max 对齐：
+          max_ax=1.5 m/s²  (MPPI ax_max=1.5)
+          max_az=2.0 rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常跳变)
+
+        当输入突然归零（如 nav_state_manager 安全停止）时，
+        限幅器以 max_ax 的减速度平滑到零，约 0.33s (0.5→0 @1.5m/s²)。
+        但此时机器人已在 stand 模式（nav_state_manager 先发 stand_mode 再停 cmd_vel），
+        RL 步态已退出，故平滑归零不会引发失稳。
+        """
+        now_sec = self.get_clock().now().nanoseconds * 1e-9
+        vx, vy, wz = self._rate_limiter.limit(
+            msg.linear.x, msg.linear.y, msg.angular.z, now_sec
+        )
+
+        out = Twist()
+        out.linear.x = vx
+        out.linear.y = vy
+        out.linear.z = msg.linear.z   # passthrough (恒为 0)
+        out.angular.x = msg.angular.x  # passthrough (恒为 0)
+        out.angular.y = msg.angular.y  # passthrough (恒为 0)
+        out.angular.z = wz
+        self._cmd_vel_pub.publish(out)
 
     def odom_callback(self, msg: Odometry):
         """
