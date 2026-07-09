@@ -37,7 +37,7 @@ namespace pcd_tools
                 open3d::pipelines::registration::
                     TransformationEstimationPointToPoint(false),
                 4 /*最小3*/, correspondence_checker,
-                open3d::pipelines::registration::RANSACConvergenceCriteria(1000000, 0.999), seed_);
+                open3d::pipelines::registration::RANSACConvergenceCriteria(1000000, 0.999));
         return registration_result;
     }
 
