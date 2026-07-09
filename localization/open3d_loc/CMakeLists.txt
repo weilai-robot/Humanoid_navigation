@@ -53,21 +53,70 @@ if(DEFINED ENV{Open3D_DIR})
 
 else()
     # 方式 A: 自动探测 pip 安装的 Open3D
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    # 不用 find_package(Python3) — conda+ROS2 环境下它可能找到错误的 Python。
+    # 直接用 PATH 中的 python3 (构建时已激活 conda env, 即装了 open3d 的那个)。
+    set(_open3d_script
+        "import open3d, os, sys, glob;"
+        "pkg_dir=os.path.dirname(open3d.__file__);"
+        "print('PYTHON:'+sys.executable);"
+        "print('PKGDIR:'+pkg_dir);"
+        # 标准 pip 包路径
+        "cm=os.path.join(pkg_dir,'lib','cmake','Open3D');"
+        "print('CMAKEDIR:'+cm);"
+        "print('EXISTS:'+str(os.path.isfile(os.path.join(cm,'Open3DConfig.cmake'))));"
+        # 如果标准路径不存在, 用 glob 搜整个包目录
+        "if not os.path.isfile(os.path.join(cm,'Open3DConfig.cmake')):"
+        "  hits=glob.glob(os.path.join(pkg_dir,'**','Open3DConfig.cmake'),recursive=True);"
+        "  print('GLOB_HITS:'+str(hits));"
+        "  if hits: print('CMAKE_FALLBACK:'+os.path.dirname(hits[0]));"
+    )
+
     execute_process(
-        COMMAND ${Python3_EXECUTABLE} -c
-            "import open3d, os; print(os.path.join(os.path.dirname(open3d.__file__), 'lib', 'cmake', 'Open3D'))"
-        OUTPUT_VARIABLE _open3d_cmake_dir
+        COMMAND python3 -c ${_open3d_script}
+        OUTPUT_VARIABLE _open3d_diag
         OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
+        ERROR_VARIABLE _open3d_err
+        ERROR_STRIP_TRAILING_WHITESPACE
         RESULT_VARIABLE _open3d_import_result
     )
 
-    if(_open3d_import_result EQUAL 0 AND EXISTS "${_open3d_cmake_dir}/Open3DConfig.cmake")
+    # 打印完整诊断 (帮助排查)
+    message(STATUS "Open3D diagnostic (exit=${_open3d_import_result}):\n${_open3d_diag}")
+    if(_open3d_err AND NOT _open3d_err STREQUAL "")
+        message(STATUS "Open3D stderr: ${_open3d_err}")
+    endif()
+
+    # 从诊断输出中提取 CMake 目录
+    set(_open3d_cmake_dir "")
+    if(_open3d_import_result EQUAL 0)
+        # 优先取 CMAKE_FALLBACK (glob 搜到的)
+        string(REGEX MATCH "CMAKE_FALLBACK:([^\n]+)" _match "${_open3d_diag}")
+        if(CMAKE_MATCH_1)
+            set(_open3d_cmake_dir "${CMAKE_MATCH_1}")
+        else()
+            # 取标准路径, 但要检查 EXISTS:true
+            string(REGEX MATCH "EXISTS:True" _exists "${_open3d_diag}")
+            if(_exists)
+                string(REGEX MATCH "CMAKEDIR:([^\n]+)" _match "${_open3d_diag}")
+                if(CMAKE_MATCH_1)
+                    set(_open3d_cmake_dir "${CMAKE_MATCH_1}")
+                endif()
+            endif()
+        endif()
+    endif()
+
+    if(_open3d_cmake_dir)
         set(Open3D_DIR "${_open3d_cmake_dir}")
         message(STATUS "Open3D: auto-detected from pip package: ${Open3D_DIR}")
     else()
-        message(STATUS "Open3D: pip package not found, falling back to CMake default search")
+        message(WARNING
+            "Open3D: auto-detection failed.\n"
+            "  Possible causes:\n"
+            "    1. pip open3d not installed in the build-time Python (try: python3 -c 'import open3d')\n"
+            "    2. pip open3d version has no C++ CMake files (C++ dev package needed)\n"
+            "  Fix: export Open3D_DIR=/path/to/open3d/lib/cmake/Open3D before building\n"
+            "       or: pip install open3d==0.18.0 (ensures CMake configs included)"
+        )
     endif()
 endif()
 
