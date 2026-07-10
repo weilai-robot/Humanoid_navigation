@@ -122,43 +122,58 @@ endif()
 find_package(Open3D REQUIRED)
 message(STATUS "Open3D: found at ${Open3D_DIR}")
 
-# Fix Open3D libraries - remove problematic .so files
-# In Ubuntu 22.04+, some libraries (librt, libc++) have different paths or are merged
-# Open3D's CMake config files may have hardcoded paths that don't exist
+# ===========================================================================
+# Fix Open3D library linking
+#
+# Open3D 预编译包用 LLVM libc++ 构建 (std::__1:: 命名空间)。
+# ROS2/conda 环境用 GCC libstdc++ (std:: 命名空间)。
+# 解决方案: 只移除 librt (Ubuntu 22.04+ 已合并到 libc)，
+#           但保留 libc++ 并在系统路径中查找它 (需要 apt install libc++-dev)。
+#           链接器同时链接 libstdc++ (GCC 默认) + libc++ (显式添加)，
+#           两套符号各取所需，互不冲突。
+# ===========================================================================
 
-# After finding Open3D, patch ALL its imported targets
-# We need to patch multiple targets that may have these dependencies
+# --- 查找系统中的 libc++ ---
+find_library(LIBCXX_LIB NAMES libc++.so libc++.so.1
+        PATHS /usr/lib/x86_64-linux-gnu /usr/lib /lib/x86_64-linux-gnu)
+find_library(LIBCXXABI_LIB NAMES libc++abi.so libc++abi.so.1
+        PATHS /usr/lib/x86_64-linux-gnu /usr/lib /lib/x86_64-linux-gnu)
+
+if(LIBCXX_LIB)
+        message(STATUS "Open3D: found libc++ at ${LIBCXX_LIB}")
+else()
+        message(WARNING
+                "Open3D: libc++ not found!\n"
+                "  Open3D prebuilt uses LLVM libc++. Please install:\n"
+                "    sudo apt install libc++-dev libc++abi-dev\n"
+                "  Then rebuild.")
+endif()
+
+# --- 从 Open3D imported targets 中移除 librt (已合并到 libc) ---
 foreach(target Open3D::Open3D Open3D::3rdparty_filament Open3D::3rdparty_glfw Open3D::3rdparty_rply Open3D::3rdparty_glew)
         if(TARGET ${target})
                 get_target_property(LINK_LIBS ${target} INTERFACE_LINK_LIBRARIES)
 
                 if(LINK_LIBS)
-                        # Create a new list with problematic libraries removed
                         set(FILTERED_LIBS "")
 
                         foreach(lib ${LINK_LIBS})
-                                # Skip problematic libraries
-                                if(NOT "${lib}" MATCHES ".*librt\\.so.*" AND
-                                        NOT "${lib}" MATCHES ".*libc\\+\\+\\.so.*" AND
-                                        NOT "${lib}" MATCHES ".*libc\\+\\+abi\\.so.*")
+                                if(NOT "${lib}" MATCHES ".*librt\\.so.*")
                                         list(APPEND FILTERED_LIBS ${lib})
                                 endif()
                         endforeach()
 
-                        # Set the filtered list back
                         set_target_properties(${target} PROPERTIES INTERFACE_LINK_LIBRARIES "${FILTERED_LIBS}")
                 endif()
         endif()
 endforeach()
 
-# Also filter the Open3D_LIBRARIES variable
+# --- 从 Open3D_LIBRARIES 变量中移除 librt ---
 if(Open3D_LIBRARIES)
         set(FILTERED_O3D_LIBS "")
 
         foreach(lib ${Open3D_LIBRARIES})
-                if(NOT "${lib}" MATCHES ".*librt\\.so.*" AND
-                        NOT "${lib}" MATCHES ".*libc\\+\\+\\.so.*" AND
-                        NOT "${lib}" MATCHES ".*libc\\+\\+abi\\.so.*")
+                if(NOT "${lib}" MATCHES ".*librt\\.so.*")
                         list(APPEND FILTERED_O3D_LIBS ${lib})
                 endif()
         endforeach()
@@ -176,7 +191,7 @@ include_directories(
 
 # Build open3d_registration library
 add_library(open3d_registration src/open3d_registration/open3d_registration.cpp)
-target_link_libraries(open3d_registration ${Open3D_LIBRARIES})
+target_link_libraries(open3d_registration ${Open3D_LIBRARIES} ${LIBCXX_LIB} ${LIBCXXABI_LIB})
 ament_target_dependencies(open3d_registration
         rclcpp
         sensor_msgs
@@ -185,7 +200,7 @@ ament_target_dependencies(open3d_registration
 
 # Build open3d_conversions library
 add_library(open3d_conversions src/open3d_conversions/open3d_conversions.cpp)
-target_link_libraries(open3d_conversions ${Open3D_LIBRARIES})
+target_link_libraries(open3d_conversions ${Open3D_LIBRARIES} ${LIBCXX_LIB} ${LIBCXXABI_LIB})
 ament_target_dependencies(open3d_conversions
         rclcpp
         sensor_msgs
@@ -202,6 +217,8 @@ ament_target_dependencies(open3d_conversions
 add_executable(global_localization_node src/global_localization.cpp)
 target_link_libraries(global_localization_node
         ${Open3D_LIBRARIES}
+        ${LIBCXX_LIB}
+        ${LIBCXXABI_LIB}
         open3d_registration
         open3d_conversions
 )
