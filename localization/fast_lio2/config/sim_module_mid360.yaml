@@ -2,9 +2,9 @@
     ros__parameters:
         feature_extract_enable: false
         point_filter_num: 1
-        max_iteration: 3
-        filter_size_surf: 0.5
-        filter_size_map: 0.5
+        max_iteration: 20
+        filter_size_surf: 0.05
+        filter_size_map: 0.2
         cube_side_length: 30.0
         runtime_pos_log_enable: false
         map_file_path: "./test.pcd"
@@ -16,7 +16,7 @@
             time_offset_lidar_to_imu: 0.0
 
         preprocess:
-            lidar_type: 4                 # 4=MID360-compatible PointCloud2 with x/y/z/intensity/tag/line
+            lidar_type: 1                 # 4=MID360-compatible PointCloud2 with x/y/z/intensity/tag/line
             scan_line: 4
             scan_rate: 10
             timestamp_unit: 2             # 2=ROS Header Time
