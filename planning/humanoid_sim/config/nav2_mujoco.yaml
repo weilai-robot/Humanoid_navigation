@@ -82,7 +82,7 @@ controller_server:
       vx_std: 0.15
       vy_std: 0.0                     # 差速模型不需要 Y 方向采样
       wz_std: 0.4               # 提供足够旋转采样空间以纠正朝向偏差
-      vx_max: 0.5                     # MuJoCo X1 安全步行速度上限
+      vx_max: 0.4                     # MuJoCo X1 安全步行速度上限
       vx_min: -0.1
       vy_max: 0.0
       wz_max: 0.4                     # 严格限制转速，人形机器人稳定上限；>0.4易步态失稳
@@ -94,8 +94,8 @@ controller_server:
       motion_model: "DiffDrive"
 
       # 加速度限制 — 人形机器人保守设置
-      ax_max: 1.5
-      ax_min: -1.5
+      ax_max: 1.0  #1.5
+      ax_min: -1.0
       az_max: 1.0
 
       visualize: true
@@ -175,7 +175,7 @@ local_costmap:
       width: 4
       height: 4
       resolution: 0.05
-      robot_radius: 0.3
+      robot_radius: 0.2
       transform_tolerance: 0.5   # 允许TF时间戳偏差，防止点云被丢弃
 
       plugins: ["voxel_layer", "denoise_layer", "inflation_layer"]
@@ -236,7 +236,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: True
-      robot_radius: 0.3
+      robot_radius: 0.2
       resolution: 0.05
       track_unknown_space: false
       transform_tolerance: 0.5   # 允许TF时间戳偏差，防止点云被丢弃
