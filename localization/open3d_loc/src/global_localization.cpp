@@ -649,16 +649,21 @@ void GloabalLocalization::CallbackScan(
 
 void GloabalLocalization::LocalizationInitialize()
 {
+    /// 初始化策略（避免独立 FPFH「连续两次」导致平方级拖延，并防止低分刷 TF 搞乱 costmap）：
+    /// 1) FPFH+ICP 全局搜：fitness <= threshold_fitness_init_ → 不写 mat_odom2map_/TF
+    /// 2) 过阈后，以该矩阵为初值仅跑 ICP（关闭 FPFH）复核；复核 fitness > threshold_fitness_
+    ///    且相对候选位姿位移/yaw 足够近 → 才写入 TF 并锁定初始化
     std::shared_ptr<open3d::geometry::PointCloud> pcd_scan(new open3d::geometry::PointCloud);
     std::shared_ptr<open3d::geometry::PointCloud> source(new open3d::geometry::PointCloud);
     std::shared_ptr<open3d::geometry::PointCloud> target(new open3d::geometry::PointCloud);
 
-    double fitness_initial; /// overlap
-    double loc_cost = 0;    /// 定位耗时(ms)
-    int count_success = 0;
+    const double verify_max_trans_m = 0.5;
+    const double verify_max_yaw_rad = 15.0 * PI / 180.0;
+    const float reg_voxel = static_cast<float>(voxelsize_fine_ > 0.2 ? voxelsize_fine_ : 0.2);
+
     while (rclcpp::ok())
     {
-        auto loc_s = std::chrono::high_resolution_clock::now(); /// 开始定位计时
+        auto loc_s = std::chrono::high_resolution_clock::now();
         lock_scan_.lock();
         if (pcd_scan_cur_->IsEmpty())
         {
@@ -666,66 +671,115 @@ void GloabalLocalization::LocalizationInitialize()
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
             continue;
         }
-        else
+
+        *pcd_scan = *pcd_scan_cur_;
+        lock_scan_.unlock();
+
+        *source = *pcd_scan;
+        *target = *pcd_map_coarse_;
+        open3d::utility::LogInfo("global init source size: {}, target size: {}",
+                                 source->points_.size(), target->points_.size());
+        if (source->points_.size() > static_cast<size_t>(maxpoints_source_))
         {
-            *pcd_scan = *pcd_scan_cur_;
-            lock_scan_.unlock();
-
-            *source = *pcd_scan;
-            *target = *pcd_map_coarse_;
-            open3d::utility::LogInfo("global init source size: {}, target size: {}", source->points_.size(), target->points_.size());
-            if (source->points_.size() > static_cast<size_t>(maxpoints_source_))
-            {
-                source = source->RandomDownSample(double(maxpoints_source_) / source->points_.size());
-            }
-            if (target->points_.size() > static_cast<size_t>(maxpoints_target_))
-            {
-                target = target->RandomDownSample(double(maxpoints_target_) / target->points_.size());
-            }
-
-            if (source->IsEmpty() || target->IsEmpty())
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                continue;
-            }
-
-            pcd_tools::Open3dRegistration registration;
-            registration.source_ori = source;
-            registration.target_ori = target;
-            registration.initial_matrix = mat_initialpose_;
-            registration.voxel_size = voxelsize_fine_ > 0.2 ? voxelsize_fine_ : 0.2;
-            registration.icp_method = 1;
-            registration.icp_iteration = 50;
-            registration.seed_ = static_cast<unsigned int>(123456);
-
-            bool registration_ok = registration.RegistrationPipeline();
-            fitness_initial = registration_ok ? registration.overlap : 0.0;
-            open3d::utility::LogInfo("global init fitness: {}", fitness_initial);
-
-            if (registration_ok)
-            {
-                lock_mat_odom2map_.lock();
-                mat_odom2map_ = registration.GetFinalMatrix();
-                lock_mat_odom2map_.unlock();
-            }
-            auto loc_e = std::chrono::high_resolution_clock::now(); /// 结束定位计时
-            loc_cost = std::chrono::duration_cast<std::chrono::microseconds>(loc_e - loc_s).count() / 1000.0;
-            RCLCPP_INFO(this->get_logger(), "localization cost: %f ms", loc_cost);
-
-            if (fitness_initial > threshold_fitness_init_)
-            {
-                count_success += 1;
-                /// 连续两次定位成功后定位初始化成功
-                if (count_success >= 2)
-                {
-                    break;
-                }
-            }
-            else
-            {
-                count_success = 0;
-            }
+            source = source->RandomDownSample(double(maxpoints_source_) / source->points_.size());
         }
+        if (target->points_.size() > static_cast<size_t>(maxpoints_target_))
+        {
+            target = target->RandomDownSample(double(maxpoints_target_) / target->points_.size());
+        }
+
+        if (source->IsEmpty() || target->IsEmpty())
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            continue;
+        }
+
+        // ---- Stage A: FPFH 全局粗配准 + ICP ----
+        pcd_tools::Open3dRegistration registration;
+        registration.source_ori = source;
+        registration.target_ori = target;
+        registration.initial_matrix = mat_initialpose_;
+        registration.voxel_size = reg_voxel;
+        registration.icp_method = 1;
+        registration.icp_iteration = 50;
+        registration.use_fpfh = true;
+        registration.seed_ = static_cast<unsigned int>(123456);
+
+        bool registration_ok = registration.RegistrationPipeline();
+        double fitness_fpfh = registration_ok ? registration.overlap : 0.0;
+        open3d::utility::LogInfo("global init FPFH fitness: {}", fitness_fpfh);
+
+        auto loc_e = std::chrono::high_resolution_clock::now();
+        double loc_cost =
+            std::chrono::duration_cast<std::chrono::microseconds>(loc_e - loc_s).count() / 1000.0;
+        RCLCPP_INFO(this->get_logger(), "global init FPFH cost: %f ms", loc_cost);
+
+        // 低分不写 TF（mat_odom2map_ 保持上一合格值或 initialpose）
+        if (!registration_ok || fitness_fpfh <= threshold_fitness_init_)
+        {
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                                 "FPFH below init threshold (%.3f <= %.3f), skip TF write",
+                                 fitness_fpfh, threshold_fitness_init_);
+            continue;
+        }
+
+        Eigen::Matrix4d candidate = registration.GetFinalMatrix();
+        RCLCPP_INFO(this->get_logger(),
+                    "FPFH passed (fitness=%.3f), ICP-only verify with candidate as init...",
+                    fitness_fpfh);
+
+        // ---- Stage B: 关闭 FPFH，仅用候选矩阵做 ICP 复核 ----
+        auto verify_s = std::chrono::high_resolution_clock::now();
+        pcd_tools::Open3dRegistration verify_reg;
+        verify_reg.source_ori = source;
+        verify_reg.target_ori = target;
+        verify_reg.initial_matrix = candidate;
+        verify_reg.voxel_size = reg_voxel;
+        verify_reg.icp_method = 1;
+        verify_reg.icp_iteration = 50;
+        verify_reg.use_fpfh = false; // 关键：不做全局重搜
+        verify_reg.seed_ = static_cast<unsigned int>(123456);
+
+        bool verify_ok = verify_reg.RegistrationPipeline();
+        double fitness_verify = verify_ok ? verify_reg.overlap : 0.0;
+        Eigen::Matrix4d verified = verify_ok ? verify_reg.GetFinalMatrix() : Eigen::Matrix4d::Identity();
+
+        auto verify_e = std::chrono::high_resolution_clock::now();
+        double verify_cost =
+            std::chrono::duration_cast<std::chrono::microseconds>(verify_e - verify_s).count() / 1000.0;
+        open3d::utility::LogInfo("global init ICP-verify fitness: {}", fitness_verify);
+        RCLCPP_INFO(this->get_logger(), "global init ICP-verify cost: %f ms", verify_cost);
+
+        if (!verify_ok || fitness_verify <= threshold_fitness_)
+        {
+            RCLCPP_WARN(this->get_logger(),
+                        "ICP verify failed (fitness=%.3f <= %.3f), discard candidate, continue FPFH",
+                        fitness_verify, threshold_fitness_);
+            continue;
+        }
+
+        // 位姿一致性：复核结果应落在候选附近（挡掉 ICP 漂到另一个局部最优）
+        Eigen::Matrix4d delta = candidate.inverse() * verified;
+        const double dx = delta(0, 3);
+        const double dy = delta(1, 3);
+        const double dist_xy = std::hypot(dx, dy);
+        const double yaw_delta = std::atan2(delta(1, 0), delta(0, 0));
+        if (dist_xy > verify_max_trans_m || std::fabs(yaw_delta) > verify_max_yaw_rad)
+        {
+            RCLCPP_WARN(this->get_logger(),
+                        "ICP verify pose jumped (dxy=%.3fm yaw=%.1fdeg), discard candidate",
+                        dist_xy, yaw_delta * 180.0 / PI);
+            continue;
+        }
+
+        // 仅在复核通过后写入 TF / 锁定
+        lock_mat_odom2map_.lock();
+        mat_odom2map_ = verified;
+        lock_mat_odom2map_.unlock();
+        RCLCPP_INFO(this->get_logger(),
+                    "global init locked: FPFH=%.3f verify=%.3f dxy=%.3fm yaw=%.1fdeg",
+                    fitness_fpfh, fitness_verify, dist_xy, yaw_delta * 180.0 / PI);
+        break;
     }
 
     open3d::utility::LogInfo("\n\n\nlocalization initialize success!!!!\n\n\n");

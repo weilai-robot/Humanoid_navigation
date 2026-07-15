@@ -74,9 +74,11 @@ def generate_launch_description():
             config_file,
             {
                 'path_map': map_file,
-                'pcd_queue_maxsize': 10,
+                # init 叠帧：3~5 平衡覆盖与糊影；过大易糊，过小单帧峰弱
+                'pcd_queue_maxsize': 5,
                 'voxelsize_coarse': 0.2,
                 'voxelsize_fine': 0.05,
+                # FPFH 过阈 + ICP-only 复核锁定；低分不写 map→odom TF
                 'threshold_fitness': 0.85,
                 'threshold_fitness_init': 0.85,
                 'loc_frequence': 2.5,
