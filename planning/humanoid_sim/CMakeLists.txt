@@ -15,6 +15,7 @@ find_package(ament_cmake REQUIRED)
 install(PROGRAMS
   scripts/odom_bridge.py
   scripts/mujoco_lidar_bridge.py
+  scripts/livox_imu_throttle.py
   scripts/leg_odom_node.py
   scripts/generate_map_from_xml.py
   scripts/generate_nav_map.py
