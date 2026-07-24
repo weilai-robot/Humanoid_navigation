@@ -1047,32 +1047,74 @@ void GloabalLocalization::StartLoc()
 
 void GloabalLocalization::CallbackInitialPose(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr initialpose)
 {
-    std::cout << "mat_odom2map_\n"
-              << mat_odom2map_ << std::endl;
-    std::cout << "confidence_loc_th_: " << confidence_loc_th_ << " current confidence: " << loc_fitness_ << std::endl;
+    Eigen::Quaterniond rotation_q(
+        initialpose->pose.pose.orientation.w,
+        initialpose->pose.pose.orientation.x,
+        initialpose->pose.pose.orientation.y,
+        initialpose->pose.pose.orientation.z);
+    if (rotation_q.norm() < 1e-6)
+    {
+        RCLCPP_WARN(this->get_logger(), "initialpose quaternion near-zero, keep previous orientation");
+        rotation_q = Eigen::Quaterniond(mat_baselink2map_.block<3, 3>(0, 0));
+    }
+    rotation_q.normalize();
 
-    std::cout << "initpose:x y z, x y z w\n"
-              << initialpose->pose.pose.position.x << " "
-              << initialpose->pose.pose.position.y << " "
-              << initialpose->pose.pose.position.z << " "
-              << initialpose->pose.pose.orientation.x << " "
-              << initialpose->pose.pose.orientation.y << " "
-              << initialpose->pose.pose.orientation.z << " "
-              << initialpose->pose.pose.orientation.w << std::endl;
-
-    Eigen::Quaterniond rotation_q;
-    rotation_q.w() = initialpose->pose.pose.orientation.w;
-    rotation_q.x() = initialpose->pose.pose.orientation.x;
-    rotation_q.y() = initialpose->pose.pose.orientation.y;
-    rotation_q.z() = initialpose->pose.pose.orientation.z;
+    // /initialpose = map_T_baselink；mat_odom2map_ = map_T_odom
+    // map_T_odom = map_T_baselink * inv(odom_T_baselink)
+    mat_initialpose_.setIdentity();
     mat_initialpose_.block<3, 3>(0, 0) = rotation_q.matrix();
-    mat_initialpose_.block<3, 1>(0, 3) = Eigen::Vector3d(initialpose->pose.pose.position.x, initialpose->pose.pose.position.y, initialpose->pose.pose.position.z);
+    mat_initialpose_.block<3, 1>(0, 3) = Eigen::Vector3d(
+        initialpose->pose.pose.position.x,
+        initialpose->pose.pose.position.y,
+        initialpose->pose.pose.position.z);
+    // 2D Pose Estimate 常把 z 置 0：保留当前定位高度
+    if (std::fabs(mat_initialpose_(2, 3)) < 1e-3 && std::fabs(mat_baselink2map_(2, 3)) > 1e-3)
+    {
+        mat_initialpose_(2, 3) = mat_baselink2map_(2, 3);
+    }
+
+    const Eigen::Matrix4d mat_baselink2odom_snap = mat_baselink2odom_;
+    const Eigen::Matrix4d mat_odom2map_new = mat_initialpose_ * mat_baselink2odom_snap.inverse();
+
     lock_mat_odom2map_.lock();
-    mat_odom2map_ = mat_initialpose_;
+    mat_odom2map_ = mat_odom2map_new;
+    mat_odom2map_kalman_ = mat_odom2map_new;
     lock_mat_odom2map_.unlock();
-    std::cout << "\n\n*** update mat_odom2map_" << std::endl;
-    std::cout << "mat_odom2map_\n"
-              << mat_odom2map_ << std::endl;
+    mat_baselink2map_ = mat_initialpose_;
+    last_loc_ = Eigen::Vector3d(0, 0, -5000); // 强制下一轮重裁 submap
+
+    if (loc_initialized_)
+    {
+        const double new_x = mat_initialpose_(0, 3);
+        const double new_y = mat_initialpose_(1, 3);
+        const double new_z = mat_initialpose_(2, 3);
+        if (kf_param_x_.size() >= 2 && kf_param_y_.size() >= 2 && kf_param_z_.size() >= 2)
+        {
+            kf_baselink_x_.KalmanFilterInit(kf_param_x_[0], kf_param_x_[1], new_x, 1);
+            kf_baselink_y_.KalmanFilterInit(kf_param_y_[0], kf_param_y_[1], new_y, 1);
+            kf_baselink_z_.KalmanFilterInit(kf_param_z_[0], kf_param_z_[1], new_z, 1);
+        }
+        if (filter_odom2map_)
+        {
+            kalman_filter_odom2map_.KalmanFilterInit(
+                kalman_processVar2_, kalman_estimatedMeasVar2_, mat_odom2map_new(2, 3), 1);
+        }
+    }
+
+    // 以下仅日志：check = map_T_odom * odom_T_base，应≈click
+    const Eigen::Matrix4d check = mat_odom2map_new * mat_baselink2odom_snap;
+    RCLCPP_INFO(this->get_logger(),
+                "manual reset /initialpose: fitness=%.3f (th=%.3f)  "
+                "click=[%.3f %.3f %.3f yaw=%.1fdeg] qxyzw=[%.3f %.3f %.3f %.3f]  "
+                "odom_T_base=[%.3f %.3f %.3f]  map_T_odom=[%.3f %.3f %.3f]  "
+                "check_base=[%.3f %.3f %.3f]",
+                loc_fitness_, confidence_loc_th_,
+                mat_initialpose_(0, 3), mat_initialpose_(1, 3), mat_initialpose_(2, 3),
+                std::atan2(mat_initialpose_(1, 0), mat_initialpose_(0, 0)) * 180.0 / PI,
+                rotation_q.x(), rotation_q.y(), rotation_q.z(), rotation_q.w(),
+                mat_baselink2odom_snap(0, 3), mat_baselink2odom_snap(1, 3), mat_baselink2odom_snap(2, 3),
+                mat_odom2map_new(0, 3), mat_odom2map_new(1, 3), mat_odom2map_new(2, 3),
+                check(0, 3), check(1, 3), check(2, 3));
 }
 
 double GloabalLocalization::ComputeMotionDis(const Eigen::Vector3d &a, const Eigen::Vector3d &b)

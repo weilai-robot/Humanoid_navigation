@@ -48,7 +48,7 @@ class LivoxImuThrottle(Node):
             depth=200,  # 输入仍可能是 1000Hz，加大以免本节点自己丢
         )
         out_qos = QoSProfile(
-            reliability=ReliabilityPolicy.BEST_EFFORT,
+            reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=50,
