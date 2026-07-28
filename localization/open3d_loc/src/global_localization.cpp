@@ -87,7 +87,7 @@ public:
 
     /// @brief 订阅fast_lio里程计信息
     void CallbackBaselink2Odom(const nav_msgs::msg::Odometry::SharedPtr baselink2odom);
-    /// @brief 订阅在baselink下的点云
+    /// @brief 订阅 FastLIO `/cloud_registered`（camera_init / odom 系，非 baselink）
     void CallbackScan(const sensor_msgs::msg::PointCloud2::SharedPtr scan_in_baselink);
 
     /// @brief 订阅在初始位姿
@@ -97,10 +97,15 @@ public:
 
     void Localization();
 
-    /// @brief 欧拉角转mat3x3
+    /// @brief 欧拉角转mat3x3（度；R = Rx(roll)*Ry(pitch)*Rz(yaw)）
     /// @param euler
     /// @return
     Eigen::Matrix3d Euler2Matrix3d(const Eigen::Vector3d euler);
+
+    /// @brief mat3x3 转欧拉角（度；与 Euler2Matrix3d 互逆）
+    /// @param rotation
+    /// @return [roll, pitch, yaw] degrees
+    Eigen::Vector3d Matrix3dToEulerDeg(const Eigen::Matrix3d &rotation);
 
     /// @brief 获取tf关系到矩阵
     /// @param frame_id
@@ -166,6 +171,12 @@ private:
     double threshold_fitness_;
     /// @brief 配准fitness(overlap)阈值
     double threshold_fitness_init_;
+    /// @brief 初始化锁定前允许的最大 |roll|（相对 initialpose，单位:度）
+    double max_init_roll_deg_ = 30.0;
+    /// @brief 初始化锁定前允许的最大 |pitch|（相对 initialpose，单位:度）
+    double max_init_pitch_deg_ = 30.0;
+    /// @brief 初始化丢弃达到该次数后打 ERROR（仍继续重试）
+    int max_init_retries_ = 20;
 
     std::thread thread_loc_;
     std::mutex lock_scan_;
@@ -328,6 +339,11 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     this->declare_parameter<double>("voxelsize_fine", 0.05);
     this->declare_parameter<double>("threshold_fitness_init", 0.9);
     this->declare_parameter<double>("threshold_fitness", 0.9);
+    // 正立先验：挡掉 FPFH 偶发 roll≈180° 高分假峰（地面↔天花板）
+    this->declare_parameter<double>("max_init_roll_deg", 30.0);
+    this->declare_parameter<double>("max_init_pitch_deg", 30.0);
+    // 初始化丢弃达到上限后打 ERROR（仍继续重试）
+    this->declare_parameter<int>("max_init_retries", 20);
     this->declare_parameter<std::vector<double>>("initialpose", std::vector<double>());
     this->declare_parameter<double>("dis_updatemap", 1);
 
@@ -362,8 +378,19 @@ GloabalLocalization::GloabalLocalization() : Node("global_loc_node"),
     this->get_parameter("voxelsize_fine", voxelsize_fine_);
     this->get_parameter("threshold_fitness_init", threshold_fitness_init_);
     this->get_parameter("threshold_fitness", threshold_fitness_);
+    this->get_parameter("max_init_roll_deg", max_init_roll_deg_);
+    this->get_parameter("max_init_pitch_deg", max_init_pitch_deg_);
+    this->get_parameter("max_init_retries", max_init_retries_);
     this->get_parameter("initialpose", initialpose_);
     this->get_parameter("dis_updatemap", dis_updatemap_);
+    if (max_init_retries_ < 1)
+    {
+        max_init_retries_ = 1;
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+                "init upright gate: max_roll=%.1fdeg max_pitch=%.1fdeg max_retries=%d",
+                max_init_roll_deg_, max_init_pitch_deg_, max_init_retries_);
 
     for (auto i : initialpose_)
     {
@@ -437,6 +464,28 @@ Eigen::Matrix3d GloabalLocalization::Euler2Matrix3d(const Eigen::Vector3d euler)
     mat3d = rollAngle * pitchAngle * yawAngle;
     return mat3d;
 }
+
+Eigen::Vector3d GloabalLocalization::Matrix3dToEulerDeg(const Eigen::Matrix3d &rotation)
+{
+    // Inverse of Euler2Matrix3d: R = Rx(roll) * Ry(pitch) * Rz(yaw)
+    const double pitch = std::asin(std::max(-1.0, std::min(1.0, rotation(0, 2))));
+    const double cp = std::cos(pitch);
+    double roll = 0.0;
+    double yaw = 0.0;
+    if (std::abs(cp) > 1e-6)
+    {
+        roll = std::atan2(-rotation(1, 2), rotation(2, 2));
+        yaw = std::atan2(-rotation(0, 1), rotation(0, 0));
+    }
+    else
+    {
+        // gimbal lock: pitch ≈ ±90°
+        roll = std::atan2(rotation(2, 1), rotation(1, 1));
+        yaw = 0.0;
+    }
+    return Eigen::Vector3d(roll, pitch, yaw) * 180.0 / M_PI;
+}
+
 bool GloabalLocalization::GetTfTransformToMatrix(std::string frame_id, std::string child_frame_id, Eigen::Matrix4d &matrix)
 {
     // 获取pose
@@ -614,6 +663,7 @@ void GloabalLocalization::CallbackBaselink2Odom(const nav_msgs::msg::Odometry::S
 void GloabalLocalization::CallbackScan(
     const sensor_msgs::msg::PointCloud2::SharedPtr scan_in_baselink)
 {
+    // 入参名历史遗留：实际订阅 /cloud_registered，点在 camera_init（odom）系
     auto cbk_s = std::chrono::high_resolution_clock::now();
     open3d::geometry::PointCloud pcd_recieved;
     // 单帧转换为open3d，几百us
@@ -652,7 +702,8 @@ void GloabalLocalization::LocalizationInitialize()
     /// 初始化策略（避免独立 FPFH「连续两次」导致平方级拖延，并防止低分刷 TF 搞乱 costmap）：
     /// 1) FPFH+ICP 全局搜：fitness <= threshold_fitness_init_ → 不写 mat_odom2map_/TF
     /// 2) 过阈后，以该矩阵为初值仅跑 ICP（关闭 FPFH）复核；复核 fitness > threshold_fitness_
-    ///    且相对候选位姿位移/yaw 足够近 → 才写入 TF 并锁定初始化
+    ///    且相对候选位姿位移/yaw 足够近、且相对 initialpose 正立 → 才写入 TF 并锁定
+    /// 3) 连续丢弃达到上限后打 ERROR；流程保持重试（不永久停死）
     std::shared_ptr<open3d::geometry::PointCloud> pcd_scan(new open3d::geometry::PointCloud);
     std::shared_ptr<open3d::geometry::PointCloud> source(new open3d::geometry::PointCloud);
     std::shared_ptr<open3d::geometry::PointCloud> target(new open3d::geometry::PointCloud);
@@ -660,6 +711,20 @@ void GloabalLocalization::LocalizationInitialize()
     const double verify_max_trans_m = 0.5;
     const double verify_max_yaw_rad = 15.0 * PI / 180.0;
     const float reg_voxel = static_cast<float>(voxelsize_fine_ > 0.2 ? voxelsize_fine_ : 0.2);
+    int retry_count = 0;
+
+    auto bump_retry = [this, &retry_count](const char *reason) {
+        ++retry_count;
+        if (retry_count >= max_init_retries_)
+        {
+            RCLCPP_ERROR_THROTTLE(
+                this->get_logger(), *this->get_clock(), 5000,
+                "global init discarded %d times (latest: %s). "
+                "Possible inverted map vs camera_init, or persistent false peak while robot is still. "
+                "Try moving the robot slightly and check extrinsic/gravity alignment.",
+                retry_count, reason);
+        }
+    };
 
     while (rclcpp::ok())
     {
@@ -703,8 +768,6 @@ void GloabalLocalization::LocalizationInitialize()
         registration.icp_method = 1;
         registration.icp_iteration = 50;
         registration.use_fpfh = true;
-        registration.seed_ = static_cast<unsigned int>(123456);
-
         bool registration_ok = registration.RegistrationPipeline();
         double fitness_fpfh = registration_ok ? registration.overlap : 0.0;
         open3d::utility::LogInfo("global init FPFH fitness: {}", fitness_fpfh);
@@ -712,7 +775,8 @@ void GloabalLocalization::LocalizationInitialize()
         auto loc_e = std::chrono::high_resolution_clock::now();
         double loc_cost =
             std::chrono::duration_cast<std::chrono::microseconds>(loc_e - loc_s).count() / 1000.0;
-        RCLCPP_INFO(this->get_logger(), "global init FPFH cost: %f ms", loc_cost);
+        RCLCPP_INFO(this->get_logger(), "global init FPFH cost: %f ms (retry=%d)",
+                    loc_cost, retry_count);
 
         // 低分不写 TF（mat_odom2map_ 保持上一合格值或 initialpose）
         if (!registration_ok || fitness_fpfh <= threshold_fitness_init_)
@@ -720,6 +784,7 @@ void GloabalLocalization::LocalizationInitialize()
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                                  "FPFH below init threshold (%.3f <= %.3f), skip TF write",
                                  fitness_fpfh, threshold_fitness_init_);
+            bump_retry("fpfh_below_threshold");
             continue;
         }
 
@@ -738,7 +803,6 @@ void GloabalLocalization::LocalizationInitialize()
         verify_reg.icp_method = 1;
         verify_reg.icp_iteration = 50;
         verify_reg.use_fpfh = false; // 关键：不做全局重搜
-        verify_reg.seed_ = static_cast<unsigned int>(123456);
 
         bool verify_ok = verify_reg.RegistrationPipeline();
         double fitness_verify = verify_ok ? verify_reg.overlap : 0.0;
@@ -755,6 +819,7 @@ void GloabalLocalization::LocalizationInitialize()
             RCLCPP_WARN(this->get_logger(),
                         "ICP verify failed (fitness=%.3f <= %.3f), discard candidate, continue FPFH",
                         fitness_verify, threshold_fitness_);
+            bump_retry("icp_verify_failed");
             continue;
         }
 
@@ -769,6 +834,26 @@ void GloabalLocalization::LocalizationInitialize()
             RCLCPP_WARN(this->get_logger(),
                         "ICP verify pose jumped (dxy=%.3fm yaw=%.1fdeg), discard candidate",
                         dist_xy, yaw_delta * 180.0 / PI);
+            bump_retry("pose_jump");
+            continue;
+        }
+
+        // 正立门限：相对 initialpose（默认正立）限制 roll/pitch，挡掉 roll≈180° 高分假峰
+        // 室内地面导航下 map / camera_init 均应为 Z 朝上；倒立解会出现地面↔天花板、Y 向表象反向
+        const Eigen::Matrix3d R_err =
+            mat_initialpose_.block<3, 3>(0, 0).transpose() * verified.block<3, 3>(0, 0);
+        const Eigen::Vector3d rpy_err_deg = Matrix3dToEulerDeg(R_err);
+        const Eigen::Vector3d rpy_abs_deg = Matrix3dToEulerDeg(verified.block<3, 3>(0, 0));
+        if (std::fabs(rpy_err_deg(0)) > max_init_roll_deg_ ||
+            std::fabs(rpy_err_deg(1)) > max_init_pitch_deg_)
+        {
+            RCLCPP_WARN(this->get_logger(),
+                        "ICP verify not upright (roll=%.1fdeg pitch=%.1fdeg yaw=%.1fdeg, "
+                        "err_roll=%.1fdeg err_pitch=%.1fdeg; max_roll=%.1f max_pitch=%.1f), discard",
+                        rpy_abs_deg(0), rpy_abs_deg(1), rpy_abs_deg(2),
+                        rpy_err_deg(0), rpy_err_deg(1),
+                        max_init_roll_deg_, max_init_pitch_deg_);
+            bump_retry("not_upright");
             continue;
         }
 
@@ -777,8 +862,11 @@ void GloabalLocalization::LocalizationInitialize()
         mat_odom2map_ = verified;
         lock_mat_odom2map_.unlock();
         RCLCPP_INFO(this->get_logger(),
-                    "global init locked: FPFH=%.3f verify=%.3f dxy=%.3fm yaw=%.1fdeg",
-                    fitness_fpfh, fitness_verify, dist_xy, yaw_delta * 180.0 / PI);
+                    "global init locked: FPFH=%.3f verify=%.3f dxy=%.3fm dyaw=%.1fdeg "
+                    "rpy=(%.1f, %.1f, %.1f)deg retries=%d",
+                    fitness_fpfh, fitness_verify, dist_xy, yaw_delta * 180.0 / PI,
+                    rpy_abs_deg(0), rpy_abs_deg(1), rpy_abs_deg(2),
+                    retry_count);
         break;
     }
 

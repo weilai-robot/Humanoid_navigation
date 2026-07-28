@@ -81,6 +81,11 @@ def generate_launch_description():
                 # FPFH 过阈 + ICP-only 复核锁定；低分不写 map→odom TF
                 'threshold_fitness': 0.75,
                 'threshold_fitness_init': 0.85,
+                # 正立先验：挡 roll≈180° 高分假峰（地面↔天花板 / Y 向表象反向）
+                'max_init_roll_deg': 30.0,
+                'max_init_pitch_deg': 30.0,
+                # 静止冷启动丢弃重试时种子递增；超限打 ERROR（仍继续重试）
+                'max_init_retries': 20,
                 'loc_frequence': 2.5,
                 'save_scan': False,
                 'hidden_removal': False,
