@@ -1,10 +1,10 @@
 """
-TF 桥接 Launch 文件
+TF 桥接 Launch 文件 (Ground-Truth 驱动版)
 启动内容：
-  1. odom_bridge 节点 — 将 FastLIO2 的 /Odometry 转换为 odom->base_footprint TF
+  1. odom_bridge 节点 — 订阅 MuJoCo /mujoco/ground_truth，发布 odom->base_footprint TF (零漂移)
      + cmd_vel relay: /cmd_vel → /cmd_vel_limiter (加速度限幅)
-  2. 静态TF: map -> odom（初始为单位变换，后续 AMCL 接管）
-  3. 静态TF: map -> camera_init（FastLIO2/OctoMap 使用）
+  2. 静态TF: map -> odom (单位变换，使 map goal = 相对起点位移)
+  3. 静态TF: map -> camera_init (FastLIO2 悬空分支，不参与 Nav2 定位)
 """
 
 from launch import LaunchDescription
@@ -14,7 +14,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     return LaunchDescription([
 
-        # ---- 1. odom_bridge: FastLIO2 Odometry -> odom->base_footprint TF ----
+        # ---- 1. odom_bridge: MuJoCo GT -> odom->base_footprint TF ----
         #        + cmd_vel relay: /cmd_vel -> /cmd_vel_limiter (加速度限幅)
         Node(
             package='humanoid_sim',
@@ -23,10 +23,9 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'use_sim_time': True,
-                'body_to_footprint_z': -1.25,   # body(雷达/IMU处) 到 base_footprint(地面) 的Z偏移 (X1 LiDAR高度≈1.25m)
                 'odom_frame': 'odom',
                 'base_frame': 'base_footprint',
-                'input_topic': '/Odometry',      # FastLIO2 发布的里程计话题
+                'input_topic': '/mujoco/ground_truth',  # MuJoCo ground truth (零漂移, 替代 FastLIO2)
                 # cmd_vel 加速度限幅中继 (Nav2 /cmd_vel → aimrt_main /cmd_vel_limiter)
                 # 参数与 nav2_mujoco.yaml 中 MPPI ax_max/az_max 对齐
                 'enable_cmd_vel_relay': True,
@@ -38,17 +37,17 @@ def generate_launch_description():
             }]
         ),
 
-        # ---- 2. 静态TF: map -> odom (初始为单位变换) ----
-        # 如果你接入 ICP / AMCL 动态发布 map->odom，则需要注释掉静态 map->odom，
-        # 否则会造成 TF 来源重复（看起来能跑，但定位融合语义不干净）。
-        #
-        # Node(
-        #     package='tf2_ros',
-        #     executable='static_transform_publisher',
-        #     name='tf_map_to_odom',
-        #     parameters=[{'use_sim_time': True}],
-        #     arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
-        # ),
+        # ---- 2. 静态TF: map -> odom (单位变换) ----
+        # 仿真中 odom 由 MuJoCo ground truth 驱动（零漂移），odom 原点 = 机器人初始位置。
+        # map->odom = identity 使 map 坐标 = 相对起点的位移，与 Nav2 goal 语义一致。
+        # 注意：使用此静态 TF 时不可再启动 ICP(open3d_loc)，否则 map->odom 双源冲突。
+        Node(
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            name='tf_map_to_odom',
+            parameters=[{'use_sim_time': True}],
+            arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
+        ),
 
         # ---- 3. 静态TF: map -> camera_init (FastLIO2 的世界坐标系) ----
         # FastLIO2 和 OctoMap 使用 camera_init 作为全局参考系
