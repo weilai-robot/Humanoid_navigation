@@ -6,6 +6,11 @@ Open3D ICP 全局定位 — X1 【真机】
 
 仿真请用: open3d_loc_x1.launch.py
 一键导航会 Include 本文件: humanoid_sim/navigation_real.launch.py
+
+TF 约定（避免双父）:
+  - 不发 base_link→motion_link：节点会动态发 map→motion_link
+  - 发 base_link→imu_link（identity）：消掉 init 时 lookup ERROR；
+    切勿发 imu_link→base_link（会与 base_footprint→base_link 争父）
 """
 
 from launch import LaunchDescription
@@ -42,13 +47,14 @@ def generate_launch_description():
     )
     map_file = LaunchConfiguration('map_file')
 
-    # base_link -> motion_link（与仿真 launch 一致；Nav2 主链用 base_footprint）
-    static_tf_base_center = Node(
+    # parent=base_link, child=imu_link（identity）—— 方向必须对：
+    # lookupTransform("base_link","imu_link") 需要 imu_link 挂在 base_link 下；
+    # 若写成 imu_link→base_link，会与 tf_bridge_real 的 base_footprint→base_link 双父。
+    static_tf_baselink2imulink = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
-        name='base_center_broadcaster',
-        arguments=['0', '0', '0', '0', '0', '0',
-                   '1', 'base_link', 'motion_link']
+        name='baselink2imulink',
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'base_link', 'imu_link']
     )
 
     global_localization_node = Node(
@@ -88,6 +94,8 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim_time_arg,
         map_file_arg,
-        static_tf_base_center,
+        # 不发 base_link→motion_link（避免与节点 map→motion_link 双父）
+        # mat_baselink2motionlink_ 缺 TF 时回落 Identity，数值正确
+        static_tf_baselink2imulink,
         global_localization_node,
     ])
