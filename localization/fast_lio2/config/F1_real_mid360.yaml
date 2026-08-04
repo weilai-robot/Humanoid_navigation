@@ -1,0 +1,62 @@
+/**:
+    ros__parameters:
+        # ============================================================
+        # FastLIO2 配置 — F1 / X1 【实机版】
+        # 雷达: Mid360 整机倒装（头部安装，离地约 1.2~1.25m）
+        # 外参说明:
+        #   Mid360 内置 IMU 与 LiDAR 同壳体；倒装时二者一起旋转，
+        #   LiDAR→IMU 相对外参仍用 Livox 出厂值（非仿真 Ry(180°)）。
+        #   仿真 sim_module_mid360_custom 的 diag(-1,1,-1) 是因为
+        #   MuJoCo 里 lidar_site 倒装、lidar_imu 正装，真机不要照搬。
+        # 平台: 真机 Mini PC / Jetson + ROS2 Humble
+        # ============================================================
+        feature_extract_enable: false
+        point_filter_num: 1
+        max_iteration: 5
+        filter_size_surf: 0.2
+        filter_size_map: 0.3
+        cube_side_length: 30.0
+        runtime_pos_log_enable: false
+        # 仅建图保存路径；导航定位用 open3d_loc 的 path_map，勿与此混淆
+        map_file_path: "./f1_x1_real_map.pcd"
+
+        common:
+            lid_topic:  "/livox/lidar"      # livox_ros_driver2 默认话题
+            imu_topic:  "/livox/imu"        # Mid360 内置 IMU（真机直接用，无需 throttle）
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 1               # 1=Livox CustomMsg
+            scan_line: 4
+            scan_rate: 10               # 10Hz
+            timestamp_unit: 3           # 3=ns，livox_ros_driver2 实机默认
+            blind: 0.3                  # Mid360 盲区 0.3m
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0
+            det_range: 10.0
+            # 出厂外参已知；行走中在线估计易漂，真机默认关闭
+            # 若首次装机外参不确定，可临时改 true，收敛后再改回 false
+            extrinsic_est_en: false
+            # Livox Mid360 出厂 LiDAR→IMU 外参
+            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
+            extrinsic_R: [ 1.0, 0.0, 0.0,
+                           0.0, 1.0, 0.0,
+                           0.0, 0.0, 1.0 ]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: true
+            scan_publish_en: true
+            dense_publish_en: true
+            scan_bodyframe_pub_en: true
+
+        pcd_save:
+            pcd_save_en: false          # 导航模式默认不存 PCD；建图时再开
+            interval: -1

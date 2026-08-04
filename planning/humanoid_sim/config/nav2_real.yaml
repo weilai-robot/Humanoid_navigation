@@ -1,17 +1,20 @@
 # ============================================================================
-# Nav2 参数 — 人形机器人真机导航 (X1 + Mid360 + car_30 建图)
+# Nav2 参数 — X1 真机 (FastLIO2 + Open3D ICP + VoxelLayer + MPPI)
 # ============================================================================
-# 传感器: /cloud_registered_body (FastLIO2, PointCloud2, body系)
-# TF 链: map -> odom -> base_footprint  (odom由odom_bridge提供, map由ICP提供)
-# 里程计: /odom (odom_bridge 转发, 含速度)
-# 全局地图: school_room_30.yaml (小车0.30m雷达建图)
-# 定位: open3d_loc ICP 实时发布 map->odom TF
-# 坐标系: ICP实测 map->camera_init Z≈0.92m
-#   body在odom Z≈+0.92m  地面在odom Z≈-0.39m
+# 传感器: /cloud_registered_body (FastLIO2, PointCloud2, body 系)
+# TF 链 (真机):
+#   map → odom          : open3d_loc (ICP)
+#   odom → base_footprint : odom_bridge (/Odometry + body_to_footprint_z≈-1.25)
+#   camera_init → body  : FastLIO2
+# 与仿真差异:
+#   - use_sim_time: False（真实时钟）
+#   - robot_base_frame: base_footprint（tf_bridge_real 只发到 footprint）
+#   - 地图: car30_real_fastlio.yaml（launch 也会传入；此处保持一致）
 # 注意: ObstacleCritic 有 bug, 用 CostCritic 替代
+# 安全: 导航结束须先 /stand_mode 再让 /cmd_vel 归零（nav_state_manager）
 # ============================================================================
 
-# --- AMCL (未启用, 由 open3d_loc ICP 动态发布 map->odom 代替) ---
+# --- AMCL (未启用; 真机用 open3d_loc) ---
 amcl:
   ros__parameters:
     use_sim_time: False
@@ -34,7 +37,7 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_footprint
     odom_topic: /odom
-    bt_loop_duration: 10
+    bt_loop_duration: 20
     default_server_timeout: 20
 
 # --- 控制器服务器 (MPPI) ---
@@ -45,7 +48,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 0.5
+    failure_tolerance: 2.0
     odom_topic: /odom
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
@@ -62,29 +65,36 @@ controller_server:
       yaw_goal_tolerance: 0.35
       stateful: True
 
-    # ---- MPPI 控制器 (人形机器人适度降速) ----
+    # ---- RotationShimController 包装 MPPI ----
+    # 目标几乎在正后方时先原地旋转，再交给 MPPI；参数沿用仿真 biped 调参
     FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      angular_dist_threshold: 2.785  # ~160°
+      forward_sampling_distance: 1.5
+      rotate_to_heading_angular_vel: 0.4
+      max_angular_accel: 2.0
+      simulate_ahead_time: 1.0
       time_steps: 32
       model_dt: 0.1
-      batch_size: 800
+      batch_size: 600
       vx_std: 0.15
       vy_std: 0.0
-      wz_std: 0.3
-      vx_max: 0.5
-      vx_min: -0.2
+      wz_std: 0.4
+      vx_max: 0.4                     # X1 真机首次联调保守上限
+      vx_min: -0.1
       vy_max: 0.0
-      wz_max: 1.2
+      wz_max: 0.4                     # >0.4 易步态失稳
       iteration_count: 1
-      prune_distance: 1.7
+      prune_distance: 0.8
       transform_tolerance: 0.5
-      temperature: 0.5
+      temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
 
-      ax_max: 1.5
-      ax_min: -1.5
-      az_max: 2.0
+      ax_max: 1.0
+      ax_min: -1.0
+      az_max: 1.0
 
       visualize: true
 
@@ -93,6 +103,7 @@ controller_server:
         "GoalCritic",
         "GoalAngleCritic",
         "PathAlignCritic",
+        "PathAngleCritic",
         "PathFollowCritic",
         "PreferForwardCritic",
         "CostCritic"
@@ -117,8 +128,16 @@ controller_server:
         cost_weight: 14.0
         cost_power: 1
         threshold_to_consider: 0.5
-        offset_from_furthest: 20
+        offset_from_furthest: 10
         use_path_orientations: false
+      PathAngleCritic:
+        enabled: true
+        cost_weight: 3.5
+        cost_power: 1
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 0.7
+        mode: 0
       PathFollowCritic:
         enabled: true
         cost_weight: 5.0
@@ -127,20 +146,21 @@ controller_server:
         threshold_to_consider: 1.4
       PreferForwardCritic:
         enabled: true
-        cost_weight: 8.0
+        cost_weight: 2.0
         cost_power: 1
         threshold_to_consider: 0.5
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0
+        cost_weight: 3.5
         critical_cost: 300.0
         collision_cost: 1000000.0
         consider_footprint: false
         near_goal_distance: 0.5
 
 # ==================== 局部代价地图 ====================
-# VoxelLayer 直接消费 FastLIO2 3D 点云, 保留高度信息
+# VoxelLayer 高度相对 costmap global_frame(odom)：
+#   FastLIO body≈Z0 时，地面≈-1.25m（odom_bridge body_to_footprint_z）
 local_costmap:
   local_costmap:
     ros__parameters:
@@ -153,42 +173,54 @@ local_costmap:
       width: 4
       height: 4
       resolution: 0.05
-      robot_radius: 0.2
+      robot_radius: 0.25
       transform_tolerance: 0.5
 
-      plugins: ["voxel_layer", "inflation_layer"]
+      plugins: ["voxel_layer", "denoise_layer", "inflation_layer"]
 
-      # 3D 体素层: 订阅 FastLIO2 去畸变体系点云
-      # 小车建图坐标系: ICP Z=0.92m → body在odom Z≈+0.92m → 地面≈-0.39m
       voxel_layer:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
-        publish_voxel_map: False       # 实机关闭以节省资源
-        origin_z: -0.50
+        publish_voxel_map: True
+        origin_z: -1.4
         z_resolution: 0.1
-        z_voxels: 16
-        max_obstacle_height: 1.10
-        min_obstacle_height: -0.29
-        mark_threshold: 1
+        z_voxels: 25                   # [-1.4, 1.1]m
+        max_obstacle_height: 0.2       # ≈ 地面(-1.25)+1.45
+        min_obstacle_height: -1.1      # ≈ 地面(-1.25)+0.15，跳过地面噪声
+        mark_threshold: 2
         unknown_threshold: 15
         combination_method: 1
-        observation_sources: pointcloud
-        pointcloud:
+        # mark/clear 分离：近距不 raytrace，避免盲区“遗忘”障碍
+        observation_sources: cloud_mark cloud_clear
+        cloud_mark:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 1.10
-          min_obstacle_height: -0.29
-          clearing: True
+          max_obstacle_height: 0.2
+          min_obstacle_height: -1.1
+          clearing: False
           marking: True
           obstacle_max_range: 5.0
           obstacle_min_range: 0.3
+        cloud_clear:
+          topic: /cloud_registered_body
+          data_type: "PointCloud2"
+          max_obstacle_height: 0.2
+          min_obstacle_height: -1.1
+          clearing: True
+          marking: False
           raytrace_max_range: 6.0
-          raytrace_min_range: 0.3
+          raytrace_min_range: 1.2
+
+      denoise_layer:
+        plugin: "nav2_costmap_2d::DenoiseLayer"
+        enabled: true
+        minimal_group_size: 3
+        group_connectivity_type: 8
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 10.0
-        inflation_radius: 0.6
+        cost_scaling_factor: 4.0
+        inflation_radius: 0.7
 
 # ==================== 全局代价地图 ====================
 global_costmap:
@@ -199,12 +231,12 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_footprint
       use_sim_time: False
-      robot_radius: 0.2
+      robot_radius: 0.25
       resolution: 0.05
       track_unknown_space: false
       transform_tolerance: 0.5
 
-      plugins: ["static_layer", "voxel_layer", "inflation_layer"]
+      plugins: ["static_layer", "voxel_layer", "denoise_layer", "inflation_layer"]
 
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -214,37 +246,44 @@ global_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
         publish_voxel_map: False
-        origin_z: -0.50
+        origin_z: -1.4
         z_resolution: 0.1
-        z_voxels: 16
-        max_obstacle_height: 1.10
-        min_obstacle_height: -0.29
-        mark_threshold: 1
+        z_voxels: 25
+        max_obstacle_height: 0.2
+        min_obstacle_height: -1.1
+        mark_threshold: 3
         unknown_threshold: 15
         combination_method: 1
         observation_sources: pointcloud
         pointcloud:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 1.10
-          min_obstacle_height: -0.29
+          max_obstacle_height: 0.2
+          min_obstacle_height: -1.1
           clearing: True
           marking: True
           obstacle_max_range: 8.0
           obstacle_min_range: 0.3
           raytrace_max_range: 10.0
-          raytrace_min_range: 0.3
+          raytrace_min_range: 0.8
+
+      denoise_layer:
+        plugin: "nav2_costmap_2d::DenoiseLayer"
+        enabled: true
+        minimal_group_size: 3
+        group_connectivity_type: 8
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.55
+        inflation_radius: 0.7
 
 # --- 地图服务器 ---
 map_server:
   ros__parameters:
     use_sim_time: False
-    yaml_filename: ""   # 由 navigation_real.launch.py 通过 launch argument 传入
+    # navigation_real.launch.py 会传入 car30_real_fastlio.yaml；此处保持一致
+    yaml_filename: "car30_real_fastlio.yaml"
 
 # --- 全局规划器 ---
 planner_server:
@@ -254,5 +293,18 @@ planner_server:
     GridBased:
       plugin: "nav2_navfn_planner/NavfnPlanner"
       tolerance: 0.5
-      use_astar: false
+      use_astar: True
       allow_unknown: true
+
+# --- Lifecycle Manager ---
+lifecycle_manager_navigation:
+  ros__parameters:
+    use_sim_time: False
+    autostart: True
+    bond_timeout: 2.0
+
+lifecycle_manager_localization:
+  ros__parameters:
+    use_sim_time: False
+    autostart: True
+    bond_timeout: 2.0

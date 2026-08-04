@@ -1,43 +1,44 @@
+"""
+Open3D ICP 全局定位 — X1 【仿真】
+默认: use_sim_time:=true, map:=mujoco_lab.pcd
+
+真机请用: open3d_loc_x1_real.launch.py
+"""
+
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node, SetParameter
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # 获取包路径
     open3d_loc_share = FindPackageShare('open3d_loc')
 
-    # 声明 use_sim_time 参数
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
-        default_value='false',
-        description='Use simulation time'
+        default_value='true',
+        description='仿真默认用 /clock；真机请用 open3d_loc_x1_real.launch.py'
     )
 
-    # 配置文件路径
     config_file = PathJoinSubstitution([
         open3d_loc_share,
         'config',
         'loc_param_x1.yaml'
     ])
 
-    # 地图文件路径作为启动参数传入，默认可给一个您的点云地图路径
-    open3d_loc_share = FindPackageShare('open3d_loc')
     default_map_path = PathJoinSubstitution([
         open3d_loc_share,
         'maps',
-        'mujoco_lab.pcd'  # test.pcd car_30_map
+        'mujoco_lab.pcd'
     ])
     map_file_arg = DeclareLaunchArgument(
         'map_file',
-        default_value=default_map_path,  # 默认去找 open3d_loc/maps/test.pcd
+        default_value=default_map_path,
         description='Path to the global map point cloud file (.pcd or .ply)'
     )
     map_file = LaunchConfiguration('map_file')
 
-    # 静态TF发布节点 - camera_init to odom
     static_tf_camera_init2odom = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -45,8 +46,6 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', '1', 'odom', 'camera_init']
     )
 
-    # 静态TF发布节点 - imu_link to base_link
-    # 修正：父frame是imu_link，子frame是base_link
     static_tf_imulink2baselink = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -54,8 +53,6 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', '1', 'imu_link', 'base_link']
     )
 
-    # 静态TF发布节点 - base_link to motion_link
-    # 修正：base_link是父frame，motion_link是子frame
     static_tf_base_center = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -64,7 +61,6 @@ def generate_launch_description():
                    '1', 'base_link', 'motion_link']
     )
 
-    # 全局定位节点
     global_localization_node = Node(
         package='open3d_loc',
         executable='global_localization_node',
@@ -74,17 +70,13 @@ def generate_launch_description():
             config_file,
             {
                 'path_map': map_file,
-                # init 叠帧：3~5 平衡覆盖与糊影；过大易糊，过小单帧峰弱
                 'pcd_queue_maxsize': 10,
                 'voxelsize_coarse': 0.2,
                 'voxelsize_fine': 0.05,
-                # FPFH 过阈 + ICP-only 复核锁定；低分不写 map→odom TF
                 'threshold_fitness': 0.75,
                 'threshold_fitness_init': 0.85,
-                # 正立先验：挡 roll≈180° 高分假峰（地面↔天花板 / Y 向表象反向）
                 'max_init_roll_deg': 30.0,
                 'max_init_pitch_deg': 30.0,
-                # 静止冷启动丢弃重试时种子递增；超限打 ERROR（仍继续重试）
                 'max_init_retries': 20,
                 'loc_frequence': 2.5,
                 'save_scan': False,
@@ -101,7 +93,6 @@ def generate_launch_description():
         ]
     )
 
-    # 点云转换节点
     pointcloud_transformer_node = Node(
         package='open3d_loc',
         executable='pointcloud_transformer_node',

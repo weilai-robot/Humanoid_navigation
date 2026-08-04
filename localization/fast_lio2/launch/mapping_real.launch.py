@@ -31,7 +31,7 @@ def generate_launch_description():
         description='Yaml config file path'
     )
     declare_config_file_cmd = DeclareLaunchArgument(
-        'config_file', default_value='car_30_mid360_real.yaml',  # 实机配置文件
+        'config_file', default_value='F1_real_mid360.yaml',  # X1 真机 Mid360 倒装
         description='Config file'
     )
     declare_rviz_cmd = DeclareLaunchArgument(
