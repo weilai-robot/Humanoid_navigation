@@ -175,10 +175,19 @@ local_costmap:
       width: 4
       height: 4
       resolution: 0.05
-      robot_radius: 0.25
+      # X1 躯干虽约 0.45m 宽，但行走摆臂/摆腿后的碰撞包络更大。
+      # 0.25m 会允许 MPPI 在 cbox3 等箱体边缘切角，实测已发生接触。
+      robot_radius: 0.30
       transform_tolerance: 0.5   # 允许TF时间戳偏差，防止点云被丢弃
 
-      plugins: ["voxel_layer", "denoise_layer", "inflation_layer"]
+      # 静态层保证 XML/PGM 中的固定障碍始终进入局部控制；VoxelLayer
+      # 只负责运行时点云障碍，不能作为固定纸箱/墙体的唯一来源。
+      plugins: ["static_layer", "voxel_layer", "denoise_layer", "inflation_layer"]
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+        subscribe_to_updates: True
 
       # 3D 体素层: 订阅 FastLIO2 去畸变体系点云
       voxel_layer:
@@ -187,7 +196,10 @@ local_costmap:
         publish_voxel_map: True        # 调试时开启, RViz 中可看 3D 体素
         origin_z: -1.4                 # MuJoCo: lidar在odom Z=0, base_link≈-0.45m, 地面≈-1.25m
         z_resolution: 0.1
-        z_voxels: 25                   # 25层×0.1m=2.5m，覆盖[-1.4m, 1.1m]，传感器origin Z≈0.87m在界内
+        # nav2_costmap_2d::VoxelLayer 的当前实现最多支持 16 层；25 会在
+        # 启动时输出错误并使局部障碍层行为不可靠。范围 [-1.4, 0.2]m
+        # 与下方 max_obstacle_height=0.2m 一致。
+        z_voxels: 16
         max_obstacle_height: 0.2       # 0.2m ≈ 地面(-1.25m)+1.45m障碍物顶部
         min_obstacle_height: -1.1      # -1.0m ≈ 地面(-1.25m)+0.25m，跳过地面噪声
         mark_threshold: 2              # # 体素列中至少 2 个点才标记障碍（单个散射噪点不再触发）
@@ -236,7 +248,7 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: True
-      robot_radius: 0.25
+      robot_radius: 0.30
       resolution: 0.05
       track_unknown_space: false
       transform_tolerance: 0.5   # 允许TF时间戳偏差，防止点云被丢弃
