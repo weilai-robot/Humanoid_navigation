@@ -49,7 +49,9 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 2.0
+    # MPPI 无法生成无碰轨迹时必须立即停下并交给 BT 恢复。继续沿用旧控制
+    # 2s 会让人形机器人在 cbox3 前开环前进，CI 已复现“optimizer fail → 碰撞”。
+    failure_tolerance: 0.0
     odom_topic: /odom
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
@@ -267,7 +269,8 @@ global_costmap:
         publish_voxel_map: False
         origin_z: -1.4
         z_resolution: 0.1
-        z_voxels: 25
+        # 与局部 VoxelLayer 一致；当前实现最多支持 16 层。
+        z_voxels: 16
         max_obstacle_height: 0.2
         min_obstacle_height: -1.0
         mark_threshold: 3          # 2→3：提高噪点过滤门槛，减少全局代价地图噪点
