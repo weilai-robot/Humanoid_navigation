@@ -1,239 +1,248 @@
 #!/usr/bin/env python3
 """
-从 lab_env.xml 的几何体定义直接生成 Nav2 2D 占据栅格地图。
-纯 Python 实现，不需要 MuJoCo 绑定。
+从 lab_env.xml 直接解析几何体生成 Nav2 2D 占据栅格地图 (mujoco_lab.pgm/yaml)。
+
+背景: 早期版本使用手工抄录的 GEOMS 几何表, 与世界 XML 演化脱节后地图失真
+(通道A 被画窄 ~0.3m, 导致 inflation 后可行走廊仅剩 ~0.1m, 全局规划极脆弱)。
+本版本直接解析 MuJoCo XML, 保证地图与世界永远一致。
+
+规则:
+  1. 仅取 conaffinity=7 (可碰撞) 的 geom
+  2. 高度过滤: 顶面 z_max >= min_top_z (默认 0.15m, 高于足底可通过的坎)
+     且底面 z_min <= max_bottom_z (默认 1.30m, 机器人本体最高可碰撞高度)
+     —— 排除天花板/高位横梁等 2D 导航无关几何
+  3. 动态障碍 (dyn_*) 默认排除 —— 设计意图: 动态避障由 VoxelLayer + 重规划
+     在线感知, 静态地图不含它们; 需要 --include-dynamic 可包含
+  4. cell 中心落入几何足迹则视为占据 (无偏栅格化, 不额外膨胀; inflation 由
+     Nav2 InflationLayer 在线完成)
 
 用法:
-  python3 generate_map_from_xml.py
-  python3 generate_map_from_xml.py --output navigation/humanoid_sim/maps/lab_env_map
+  python3 generate_map_from_xml.py [--xml PATH] [--output-dir DIR] [--include-dynamic]
 
-输出:
-  <output>.pgm + <output>.yaml
+纯标准库实现, 可在任何机器离线运行 (CI/本地均无需 ROS)。
 """
 
-import math
-import re
 import argparse
+import math
+import os
+import sys
+import xml.etree.ElementTree as ET
 
-# ─── lab_env.xml 中的所有可碰撞几何体 (conaffinity=7) ───
-# 格式: (type, cx, cy, size_param1, size_param2, name)
+# ─── 默认路径 (相对 navigation 仓库根) ───
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_XML = os.path.join(
+    HERE, '..', '..', '..', '..',
+    'motion_control', 'module', 'sim_module', 'model', 'mjcf',
+    'environment', 'lab_env.xml')
+DEFAULT_OUT_DIR = os.path.join(HERE, '..', 'maps')
 
-GEOMS = [
-    # 外墙 (box: cx, cy, half_x, half_y)
-    ('box',  -10,    0,  0.1, 5.1, 'wall_west'),
-    ('box',   10,    0,  0.1, 5.1, 'wall_east'),
-    ('box',    0, -5.0, 10.1, 0.1, 'wall_south'),
-    ('box',    0,  5.0, 10.1, 0.1, 'wall_north'),
+RESOLUTION = 0.05
+# 地图边界: 完整包含外墙 (±10.1 / ±5.1) 并留半格余量
+MAP_X0, MAP_Y0 = -10.15, -5.15
+MAP_NX = 406          # 406 * 0.05 = 20.30m -> X ∈ [-10.15, 10.15]
+MAP_NY = 206          # 206 * 0.05 = 10.30m -> Y ∈ [-5.15, 5.15]
 
-    # 中央隔断墙 X=2
-    ('box',    2, -4.20,  0.1, 0.80, 'par_s1'),
-    ('box',    2,  0.2125, 0.1, 2.8125, 'par_s2'),
-    ('box',    2,  4.1875, 0.1, 0.8125, 'par_s3'),
+MIN_TOP_Z = 0.15      # 障碍顶面低于此高度 → 机器人可跨越/足底间隙 → 不入图
+MAX_BOTTOM_Z = 1.30   # 障碍底面高于此 → 只会打到头部以上传感器 → 仍入图保守处理? 否, 不入图
 
-    # 通道A 警示柱
-    ('circle', 2, -3.42, 0.04, 0, 'marker_A1'),
-    ('circle', 2, -2.58, 0.04, 0, 'marker_A2'),
-    # 通道B 警示柱
-    ('circle', 2,  3.02, 0.04, 0, 'marker_B1'),
-    ('circle', 2,  3.38, 0.04, 0, 'marker_B2'),
-
-    # 玻璃隔断 X=5
-    ('box',    5,  2.9,  0.04, 1.9, 'glass1'),
-    ('box',    5,  2.9,  0.06, 1.9, 'glass1_beam'),
-    ('box',    5, -3.3,  0.04, 1.5, 'glass2'),
-    ('box',    5, -3.3,  0.06, 1.5, 'glass2_beam'),
-    ('box',    5,  1.05, 0.05, 0.05, 'glass1_frameL'),
-    ('box',    5,  4.75, 0.05, 0.05, 'glass1_frameR'),
-    ('box',    5, -4.75, 0.05, 0.05, 'glass2_frameL'),
-    ('box',    5, -1.85, 0.05, 0.05, 'glass2_frameR'),
-
-    # 西区工作台 (贴南墙)
-    ('box',   -7,  -4.47, 1.2, 0.32, 'wbench1'),
-    ('box',   -2,  -4.47, 1.0, 0.32, 'wbench2'),
-
-    # 会议桌 + 椅子 (x=-5.5, y=0)
-    ('box',  -5.5,  0, 1.6, 0.70, 'conf_table'),
-    ('box',  -7.0, -0.95, 0.21, 0.21, 'chair_s1'),
-    ('box',  -6.2, -0.95, 0.21, 0.21, 'chair_s2'),
-    ('box',  -5.4, -0.95, 0.21, 0.21, 'chair_s3'),
-    ('box',  -4.6, -0.95, 0.21, 0.21, 'chair_s4'),
-    ('box',  -7.0,  0.95, 0.21, 0.21, 'chair_n1'),
-    ('box',  -6.2,  0.95, 0.21, 0.21, 'chair_n2'),
-    ('box',  -5.4,  0.95, 0.21, 0.21, 'chair_n3'),
-    ('box',  -4.6,  0.95, 0.21, 0.21, 'chair_n4'),
-
-    # 办公桌 (贴西墙)
-    ('box',  -9.3,  3.0, 0.62, 0.33, 'desk1'),
-    ('box',  -9.3,  2.1, 0.20, 0.20, 'desk1_chair'),
-    ('box',  -9.3, -3.0, 0.62, 0.33, 'desk2'),
-    ('box',  -9.3, -2.1, 0.20, 0.20, 'desk2_chair'),
-
-    # 工作台W3 (贴北墙)
-    ('box',  -6.5,  4.47, 2.0, 0.32, 'wbench3'),
-
-    # 东区实验台 (L形)
-    ('box',   6.5, -1.2, 1.8, 0.40, 'lab1'),
-    ('box',   8.05, 0.2, 0.40, 1.0, 'lab2'),
-
-    # 服务器机柜 (贴东墙)
-    ('box',   9.65,  2.2, 0.30, 0.52, 'rack1'),
-    ('box',   9.65,  0.9, 0.30, 0.52, 'rack2'),
-    ('box',   9.65, -0.4, 0.30, 0.52, 'rack3'),
-
-    # 东区工作台 (贴北墙)
-    ('box',   6.5,  4.47, 1.4, 0.32, 'wbench_e1'),
-
-    # 地面散落纸箱
-    ('box',  -3.5,  2.0, 0.30, 0.30, 'cbox1'),
-    ('box',  -3.0,  2.6, 0.25, 0.40, 'cbox2'),
-    ('box',  -1.5, -2.8, 0.30, 0.22, 'cbox3'),
-    ('box',   3.5, -3.8, 0.35, 0.25, 'cbox4'),
-    ('box',   2.8, -3.2, 0.22, 0.22, 'cbox5'),
-    ('box',   3.2,  3.5, 0.28, 0.28, 'cbox6'),
-
-    # 结构柱
-    ('box',  -3.3,  4.8, 0.15, 0.15, 'col1'),
-    ('box',  -3.3, -4.8, 0.15, 0.15, 'col2'),
-    ('box',   3.3,  4.8, 0.15, 0.15, 'col3'),
-    ('box',   3.3, -4.8, 0.15, 0.15, 'col4'),
-
-    # 消防栓箱
-    ('box',  -9.92, 0, 0.08, 0.25, 'fire_box'),
-    # 配电柜
-    ('box',   4.0, -4.88, 0.12, 0.50, 'elec_panel'),
-    # 移动推车
-    ('box',   2.5,  1.5, 0.35, 0.25, 'cart'),
-    # 废料桶
-    ('circle', -8.5,  4.7, 0.18, 0, 'bin1'),
-    ('circle',  9.0,  4.7, 0.18, 0, 'bin2'),
-
-    # 台面仪器 (小箱体, 仅标注位置)
-    ('box',  -7.8, -4.47, 0.18, 0.16, 'inst1'),
-    ('box',  -7.1, -4.47, 0.12, 0.12, 'inst2'),
-    ('box',  -2.5, -4.47, 0.15, 0.18, 'inst3'),
-    ('box',   5.8, -1.2, 0.20, 0.20, 'inst4'),
-    ('box',   6.5, -1.2, 0.14, 0.14, 'inst5'),
-
-    # 动态障碍物 (静态地图中也标记)
-    ('circle', 0.5, -3.0, 0.22, 0, 'dyn_person'),
-    ('box',   -1.5,  1.8, 0.30, 0.25, 'dyn_box'),
-    ('box',    3.5, -3.0, 0.25, 0.20, 'dyn_crate'),
-]
+PGM_OCC = 0           # 占据像素值
+PGM_FREE = 254        # 自由像素值 (trinary 模式下与 205 等价均为 free)
 
 
-def point_to_box_dist(px, py, cx, cy, hx, hy):
-    """点到矩形的有符号距离 (负=内部, 正=外部)"""
-    dx = abs(px - cx) - hx
-    dy = abs(py - cy) - hy
-    if dx < 0 and dy < 0:
-        # 在矩形内部: 到最近边的距离 (取绝对值较小的)
-        return -min(abs(dx), abs(dy))
-    return math.sqrt(max(dx, 0)**2 + max(dy, 0)**2)
+def parse_geoms(xml_path):
+    """解析 XML 中全部 geom, 返回 dict 列表 (含足迹类型/参数与 z 波段)."""
+    tree = ET.parse(xml_path)
+    geoms = []
+    for g in tree.getroot().iter('geom'):
+        name = (g.get('name') or '').strip()
+        gtype = (g.get('type') or 'sphere').strip()
+        try:
+            size = [float(v) for v in (g.get('size') or '0').split()]
+            pos = [float(v) for v in (g.get('pos') or '0 0 0').split()]
+        except ValueError as e:
+            raise SystemExit(f"[错误] geom '{name}' size/pos 解析失败: {e}")
+        while len(pos) < 3:
+            pos.append(0.0)
+        conaffinity = int(g.get('conaffinity') or '0')
+
+        item = dict(name=name, type=gtype, size=size, pos=pos,
+                    conaffinity=conaffinity)
+        # 计算 2D 足迹与 z 波段
+        if gtype == 'box':
+            sx, sy, sz = size[0], size[1], size[2]
+            item['footprint'] = ('rect', pos[0], pos[1], sx, sy)
+            item['zband'] = (pos[2] - sz, pos[2] + sz)
+        elif gtype == 'cylinder':
+            r, half_h = size[0], size[1]
+            item['footprint'] = ('circle', pos[0], pos[1], r)
+            item['zband'] = (pos[2] - half_h, pos[2] + half_h)
+        elif gtype == 'sphere':
+            r = size[0]
+            item['footprint'] = ('circle', pos[0], pos[1], r)
+            item['zband'] = (pos[2] - r, pos[2] + r)
+        elif gtype == 'plane':
+            item['footprint'] = None      # 地面, 不入图
+            item['zband'] = None
+        else:
+            # capsule/ellipsoid/mesh 等保守处理: 目前环境未使用
+            item['footprint'] = None
+            item['zband'] = None
+        geoms.append(item)
+    return geoms
 
 
-def point_to_circle_dist(px, py, cx, cy, r):
-    """点到圆的有符号距离"""
-    return math.sqrt((px - cx)**2 + (py - cy)**2) - r
+def geom_is_2d_obstacle(g, include_dynamic):
+    """判定 geom 是否进入 2D 占据图."""
+    if g['footprint'] is None:
+        return False, 'type-skipped'
+    if g['conaffinity'] != 7:
+        return False, 'no-collision'
+    if not include_dynamic and g['name'].startswith('dyn_'):
+        return False, 'dynamic-excluded'
+    z_min, z_max = g['zband']
+    if z_max < MIN_TOP_Z:
+        return False, f'too-low(top={z_max:.2f}m)'
+    if z_min > MAX_BOTTOM_Z:
+        return False, f'too-high(bottom={z_min:.2f}m)'
+    return True, 'included'
 
 
-def generate_map(resolution=0.05, inflation_radius=0.0,
-                 x_range=(-10.5, 10.5), y_range=(-5.5, 5.5)):
-    w = int((x_range[1] - x_range[0]) / resolution)
-    h = int((y_range[1] - y_range[0]) / resolution)
+def rasterize(geoms, include_dynamic):
+    """返回 (grid, included, excluded): grid[y][x] 1=占据."""
+    grid = [[0] * MAP_NX for _ in range(MAP_NY)]
+    included, excluded = [], []
+    for g in geoms:
+        ok, why = geom_is_2d_obstacle(g, include_dynamic)
+        (included if ok else excluded).append((g['name'], why))
 
-    print(f"Grid: {w} x {h} pixels, {w*resolution:.1f}m x {h*resolution:.1f}m")
-    print(f"Resolution: {resolution}m, Inflation: {inflation_radius}m")
+        if not ok:
+            continue
+        ftype = g['footprint'][0]
+        if ftype == 'rect':
+            _, cx, cy, sx, sy = g['footprint']
+            # 几何足迹在 X/Y 方向的占据范围
+            x_lo, x_hi = cx - sx, cx + sx
+            y_lo, y_hi = cy - sy, cy + sy
+            # 覆盖的 cell 中心范围 (中心在足迹内即占据)
+            i0 = max(0, math.ceil((x_lo - MAP_X0) / RESOLUTION - 0.5))
+            i1 = min(MAP_NX - 1, math.floor((x_hi - MAP_X0) / RESOLUTION - 0.5))
+            j0 = max(0, math.ceil((y_lo - MAP_Y0) / RESOLUTION - 0.5))
+            j1 = min(MAP_NY - 1, math.floor((y_hi - MAP_Y0) / RESOLUTION - 0.5))
+            for j in range(j0, j1 + 1):
+                y = MAP_Y0 + (j + 0.5) * RESOLUTION
+                for i in range(i0, i1 + 1):
+                    grid[j][i] = 1
+        else:  # circle
+            _, cx, cy, r = g['footprint']
+            i0 = max(0, math.ceil((cx - r - MAP_X0) / RESOLUTION - 0.5))
+            i1 = min(MAP_NX - 1, math.floor((cx + r - MAP_X0) / RESOLUTION - 0.5))
+            j0 = max(0, math.ceil((cy - r - MAP_Y0) / RESOLUTION - 0.5))
+            j1 = min(MAP_NY - 1, math.floor((cy + r - MAP_Y0) / RESOLUTION - 0.5))
+            r2 = r * r
+            for j in range(j0, j1 + 1):
+                y = MAP_Y0 + (j + 0.5) * RESOLUTION
+                for i in range(i0, i1 + 1):
+                    x = MAP_X0 + (i + 0.5) * RESOLUTION
+                    if (x - cx) ** 2 + (y - cy) ** 2 <= r2:
+                        grid[j][i] = 1
+    return grid, included, excluded
 
-    # ROS PGM convention: 0=black=OCCUPIED, 254=white=FREE
-    grid = bytearray([254] * (w * h))  # default all FREE (white)
 
-    for gy in range(h):
-        wy = y_range[0] + gy * resolution
-        pgm_row = h - 1 - gy  # PGM Y flip
-        for gx in range(w):
-            wx = x_range[0] + gx * resolution
+def write_pgm(path, grid):
+    h, w = len(grid), len(grid[0])
+    with open(path, 'wb') as f:
+        f.write(b'P5\n')
+        f.write(f'# generated by generate_map_from_xml.py\n'.encode())
+        f.write(f'{w} {h}\n255\n'.encode())
+        f.write(bytes(PGM_OCC if grid[j][i] else PGM_FREE
+                      for j in range(h) for i in range(w)))
 
-            min_dist = float('inf')
-            for gtype, cx, cy, s1, s2, name in GEOMS:
-                if gtype == 'box':
-                    d = point_to_box_dist(wx, wy, cx, cy, s1, s2)
-                else:
-                    d = point_to_circle_dist(wx, wy, cx, cy, s1)
 
-                if d < min_dist:
-                    min_dist = d
-                    if min_dist <= 0:
-                        break
+def write_yaml(path, pgm_name):
+    with open(path, 'w') as f:
+        f.write(f'image: {pgm_name}\n')
+        f.write('resolution: 0.05\n')
+        f.write(f'origin: [{MAP_X0:.2f}, {MAP_Y0:.2f}, 0]\n')
+        f.write('negate: 0\n')
+        f.write('occupied_thresh: 0.65\n')
+        f.write('free_thresh: 0.25\n')
+        f.write('mode: trinary\n')
 
-            if min_dist <= 0:
-                grid[pgm_row * w + gx] = 0       # OCCUPIED (black)
-            elif min_dist <= inflation_radius:
-                grid[pgm_row * w + gx] = 0       # inflated obstacle (black)
 
-    return grid, w, h
+def world_to_cell(x, y):
+    i = math.floor((x - MAP_X0) / RESOLUTION)
+    j = math.floor((y - MAP_Y0) / RESOLUTION)
+    return i, j
+
+
+def free_width_at_x(grid, x, y_lo, y_hi):
+    """统计给定 X 列在 [y_lo, y_hi] 内的自由竖直连续段 (用于通道宽度校验)."""
+    i, _ = world_to_cell(x, 0)
+    runs, run = [], 0
+    j0, j1 = world_to_cell(0, y_lo)[1], world_to_cell(0, y_hi)[1]
+    for j in range(j0, j1 + 1):
+        if grid[j][i] == 0:
+            run += 1
+        else:
+            if run:
+                runs.append(run)
+            run = 0
+    if run:
+        runs.append(run)
+    return [(n * RESOLUTION) for n in runs]
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--output', default='navigation/humanoid_sim/maps/lab_env_map',
-                        help='Output basename')
-    parser.add_argument('--resolution', type=float, default=0.05)
-    parser.add_argument('--inflation', type=float, default=0.35)
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description='从 lab_env.xml 生成 Nav2 2D 占据地图')
+    ap.add_argument('--xml', default=os.path.normpath(DEFAULT_XML),
+                    help='lab_env.xml 路径 (默认: motion_control .../environment/lab_env.xml)')
+    ap.add_argument('--output-dir', default=os.path.normpath(DEFAULT_OUT_DIR),
+                    help='输出目录 (默认: humanoid_sim/maps)')
+    ap.add_argument('--basename', default='mujoco_lab',
+                    help='输出文件基名 (默认 mujoco_lab -> mujoco_lab.pgm/.yaml)')
+    ap.add_argument('--include-dynamic', action='store_true',
+                    help='包含 dyn_* 动态障碍 (默认排除, 保留动态避障测试意义)')
+    args = ap.parse_args()
 
-    grid, w, h = generate_map(
-        resolution=args.resolution,
-        inflation_radius=args.inflation
-    )
+    if not os.path.isfile(args.xml):
+        sys.exit(f"[错误] 找不到世界 XML: {args.xml}")
 
-    pgm_file = f'{args.output}.pgm'
-    yaml_file = f'{args.output}.yaml'
+    geoms = parse_geoms(args.xml)
+    grid, included, excluded = rasterize(geoms, args.include_dynamic)
 
-    x_range = (-10.5, 10.5)
-    y_range = (-5.5, 5.5)
+    os.makedirs(args.output_dir, exist_ok=True)
+    pgm_path = os.path.join(args.output_dir, args.basename + '.pgm')
+    yaml_path = os.path.join(args.output_dir, args.basename + '.yaml')
+    write_pgm(pgm_path, grid)
+    write_yaml(yaml_path, os.path.basename(pgm_path))
 
-    # Save PGM
-    with open(pgm_file, 'wb') as f:
-        f.write(b'P5\n')
-        f.write(f'{w} {h}\n'.encode())
-        f.write(b'255\n')
-        f.write(grid)
+    occ = sum(sum(row) for row in grid)
+    total = MAP_NX * MAP_NY
+    print(f"[OK] 解析 {len(geoms)} 个 geom; 入图 {len(included)} / 排除 {len(excluded)}")
+    print(f"[OK] 地图 {MAP_NX}x{MAP_NY} @ {RESOLUTION}m, 占据 {occ} 格 "
+          f"({100.0 * occ / total:.1f}%), 自由 {total - occ} 格")
+    print(f"[OK] 写出: {pgm_path}")
+    print(f"[OK] 写出: {yaml_path}")
 
-    # Save YAML
-    with open(yaml_file, 'w') as f:
-        f.write(f'image: {args.output.split("/")[-1]}.pgm\n')
-        f.write(f'mode: trinary\n')
-        f.write(f'resolution: {args.resolution}\n')
-        f.write(f'origin: [{x_range[0]}, {y_range[0]}, 0]\n')
-        f.write(f'negate: 0\n')
-        f.write(f'occupied_thresh: 0.65\n')
-        f.write(f'free_thresh: 0.25\n')
+    print("\n── 排除明细 ──")
+    for name, why in excluded:
+        print(f"  {name:22s} {why}")
+    print("\n── 关键通道校验 (cell 级自由宽度) ──")
+    for label, x, ylo, yhi in [
+            ('通道A (X=2.0, Y -4.5~-1.5)', 2.0, -4.5, -1.5),
+            ('通道B (X=2.0, Y +2.5~+3.9)', 2.0, 2.5, 3.9),
+            ('玻璃缺口 (X=5.0, Y -2.2~+1.4)', 5.0, -2.2, 1.4)]:
+        widths = free_width_at_x(grid, x, ylo, yhi)
+        print(f"  {label}: 自由段 {[f'{w:.2f}m' for w in widths]}")
 
-    # ROS convention: 254=FREE(white), 0=OCCUPIED(black)
-    free = sum(1 for b in grid if b > 200)
-    wall = sum(1 for b in grid if b < 50)
-    print(f"\nGenerated: {pgm_file}")
-    print(f"  Size: {w}x{h}, Free: {free} ({free/len(grid)*100:.1f}%), Wall: {wall} ({wall/len(grid)*100:.1f}%)")
-
-    # 验证
-    def check(wx, wy, label):
-        px = int((wx - x_range[0]) / args.resolution)
-        py = h - 1 - int((wy - y_range[0]) / args.resolution)
-        v = grid[py * w + px] if 0 <= py < h and 0 <= px < w else -1
-        s = 'FREE' if v > 200 else 'WALL' if v < 50 else '?'
-        print(f"  {label:25s} ({wx:5.1f},{wy:5.1f}): {v:3d} {s}")
-
-    print("\n=== Verification ===")
-    check(0, 0, "Robot origin")
-    check(5, 0, "Target (5,0)")
-    check(2, 0, "Partition wall X=2,Y=0")
-    check(2, -3.0, "Passage A center")
-    check(2, -3.3, "Passage A edge1")
-    check(2, -2.7, "Passage A edge2")
-    check(5, -1.5, "Glass gap center")
-    check(0.5, -3.0, "Dyn person pos")
-    check(-5, 0, "West room center")
-    check(6, -2, "East room center")
+    print("\n── 关键点状态 ──")
+    for label, x, y in [('原点(0,0)', 0, 0), ('A目标(5,0)', 5, 0),
+                        ('B目标(8,-3)', 8, -3), ('D目标(6,3.2)', 6, 3.2),
+                        ('E/F目标(-7.8,-3.9)', -7.8, -3.9),
+                        ('通道A中心(2,-3)', 2, -3)]:
+        i, j = world_to_cell(x, y)
+        s = 'FREE' if grid[j][i] == 0 else 'OCCUPIED'
+        print(f"  {label:22s} {s}")
 
 
 if __name__ == '__main__':

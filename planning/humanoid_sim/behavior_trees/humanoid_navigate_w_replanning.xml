@@ -1,0 +1,52 @@
+<?xml version="1.0"?>
+<!--
+  人形机器人保守导航行为树 (MuJoCo X1 sim2sim)
+
+  与 nav2 默认 navigate_to_pose_w_replanning_and_recovery 的区别:
+    RecoveryActions 仅包含 [清代价地图+短暂等待, 等待] ——
+    完全移除 Spin / BackUp / DriveOnHeading。
+
+  原因 (2026-07-14 CI 事故根因):
+    默认 BT 在路径跟随停滞 (progress_checker 超时) 后触发 behavior_server
+    默认 Spin (1.57 rad @ 0.798 rad/s) —— 该角速度远超人形 RL 步态稳定上限
+    (wz_max=0.4)，且不经过 MPPI/限幅器约束，机器人当场摔倒，随后 FastLIO
+    发散、costmap "sensor origin out of bounds"、规划全灭。
+
+  设计:
+    - 路径跟随停滞 → 只做: 清空局部+全局代价地图 → 等 2s → 重规划重试
+    - Retry 次数 6, 每轮之间额外等 5s, 给 RL 步态恢复窗口
+    - 全部重试失败 → BT 返回 FAILURE → nav_test_runner 记录 ABORTED (场景判负)
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0" name="ComputePathToPose">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPoseRecovery">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context"
+                                service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPathRecovery">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context"
+                              service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree"
+                                service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree"
+                                service_name="global_costmap/clear_entirely_global_costmap"/>
+            <Wait wait_duration="2"/>
+          </Sequence>
+          <Wait wait_duration="5"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

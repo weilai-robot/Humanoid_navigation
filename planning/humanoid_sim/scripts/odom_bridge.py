@@ -33,28 +33,40 @@ from scipy.spatial.transform import Rotation
 
 
 class VelocityRateLimiter:
-    """速度变化率限制器（加速度限幅）
+    """速度变化率限制器（加速度限幅 + 幅值硬限幅）
 
     将 Nav2 输出的速度指令平滑到 RL 步态可跟踪的加速度范围内，
     防止 MPPI 轨迹切换或规划器重置时产生的速度跳变冲击 RL 策略导致摔倒。
 
     参数选择依据 (与 nav2_mujoco.yaml MPPI 配置对齐):
-      max_ax = 1.5 m/s²   — 匹配 MPPI ax_max=1.5，不干扰正常加速
+      max_ax = 1.0 m/s²   — 匹配 MPPI ax_max=1.0，不干扰正常加速
       max_ay = 0.5 m/s²   — 人形侧步保守值 (当前 DiffDrive vy=0，不触发)
-      max_az = 2.0 rad/s² — 略大于 MPPI az_max=1.0，仅截断异常跳变
+      max_az = 1.0 rad/s² — 匹配 MPPI az_max=1.0
+      max_vx_abs = 0.45 m/s   — 幅值硬限幅。人形安全上限 (MPPI vx_max=0.4 + 余量)，
+                                关键作用: 拦截绕过控制器的旁路指令
+                                (如 behavior_server 未配置时的默认参数)
+      max_vy_abs = 0.1 m/s    — 人形侧步危险，基本禁止
+      max_wz_abs = 0.45 rad/s — 同上。2026-07-14 CI 事故: behavior_server 默认
+                                spin 以 0.798 rad/s 原地旋转直接导致机器人摔倒，
+                                FastLIO 随之发散 (drift 826m)。此硬限幅保证任何
+                                Nav2 侧指令都不超过人形稳定上限。
     """
 
-    def __init__(self, max_ax=1.5, max_ay=0.5, max_az=2.0):
+    def __init__(self, max_ax=1.0, max_ay=0.5, max_az=1.0,
+                 max_vx_abs=0.45, max_vy_abs=0.1, max_wz_abs=0.45):
         self.max_ax = max_ax
         self.max_ay = max_ay
         self.max_az = max_az
+        self.max_vx_abs = max_vx_abs
+        self.max_vy_abs = max_vy_abs
+        self.max_wz_abs = max_wz_abs
         self._last_vx = 0.0
         self._last_vy = 0.0
         self._last_wz = 0.0
         self._last_time = None  # None 表示首帧，直接透传不限幅
 
     def limit(self, vx, vy, wz, now_sec):
-        """对 (vx, vy, wz) 施加加速度限幅，返回限幅后的值。
+        """对 (vx, vy, wz) 施加幅值硬限幅 + 加速度限幅，返回限幅后的值。
 
         Args:
             vx, vy, wz: 目标速度 (m/s, m/s, rad/s)
@@ -63,12 +75,17 @@ class VelocityRateLimiter:
             (vx_limited, vy_limited, wz_limited)
         """
         if self._last_time is None:
-            # 首帧：记录状态，直接透传
-            self._last_vx = vx
-            self._last_vy = vy
-            self._last_wz = wz
+            # 首帧：先做幅值硬限幅再记录状态
+            self._last_vx = self._clamp_abs(vx, self.max_vx_abs)
+            self._last_vy = self._clamp_abs(vy, self.max_vy_abs)
+            self._last_wz = self._clamp_abs(wz, self.max_wz_abs)
             self._last_time = now_sec
             return vx, vy, wz
+
+        # 1) 幅值硬限幅（安全边界，任何来源的指令都不例外）
+        vx = self._clamp_abs(vx, self.max_vx_abs)
+        vy = self._clamp_abs(vy, self.max_vy_abs)
+        wz = self._clamp_abs(wz, self.max_wz_abs)
 
         dt = now_sec - self._last_time
         if dt < 1e-6:
@@ -92,6 +109,10 @@ class VelocityRateLimiter:
 
         return self._last_vx, self._last_vy, self._last_wz
 
+    @staticmethod
+    def _clamp_abs(value, limit):
+        return max(-limit, min(limit, value))
+
 
 class OdomBridge(Node):
     def __init__(self):
@@ -108,9 +129,12 @@ class OdomBridge(Node):
         self.declare_parameter('enable_cmd_vel_relay', True)
         self.declare_parameter('cmd_vel_input_topic', '/cmd_vel')
         self.declare_parameter('cmd_vel_output_topic', '/cmd_vel_limiter')
-        self.declare_parameter('max_ax', 1.5)    # m/s²，匹配 MPPI ax_max
+        self.declare_parameter('max_ax', 1.0)    # m/s²，匹配 MPPI ax_max
         self.declare_parameter('max_ay', 0.5)    # m/s²，侧步保守值
-        self.declare_parameter('max_az', 2.0)    # rad/s²，略大于 MPPI az_max
+        self.declare_parameter('max_az', 1.0)    # rad/s²，匹配 MPPI az_max
+        self.declare_parameter('max_vx_abs', 0.45)  # m/s 幅值硬限幅
+        self.declare_parameter('max_vy_abs', 0.1)   # m/s 幅值硬限幅
+        self.declare_parameter('max_wz_abs', 0.45)  # rad/s 幅值硬限幅
 
         self.body_to_footprint_z = self.get_parameter('body_to_footprint_z').value
         self.odom_frame = self.get_parameter('odom_frame').value
@@ -159,7 +183,11 @@ class OdomBridge(Node):
             max_ax = self.get_parameter('max_ax').value
             max_ay = self.get_parameter('max_ay').value
             max_az = self.get_parameter('max_az').value
-            self._rate_limiter = VelocityRateLimiter(max_ax, max_ay, max_az)
+            max_vx_abs = self.get_parameter('max_vx_abs').value
+            max_vy_abs = self.get_parameter('max_vy_abs').value
+            max_wz_abs = self.get_parameter('max_wz_abs').value
+            self._rate_limiter = VelocityRateLimiter(
+                max_ax, max_ay, max_az, max_vx_abs, max_vy_abs, max_wz_abs)
             self._cmd_vel_sub = self.create_subscription(
                 Twist, cmd_vel_input, self._cmd_vel_relay_cb, 10
             )
@@ -175,7 +203,9 @@ class OdomBridge(Node):
                 f'\n  cmd_vel relay: {cmd_vel_input} -> {cmd_vel_output}'
                 f' (max_ax={self._rate_limiter.max_ax},'
                 f' max_ay={self._rate_limiter.max_ay},'
-                f' max_az={self._rate_limiter.max_az})'
+                f' max_az={self._rate_limiter.max_az},'
+                f' |vx|<={self._rate_limiter.max_vx_abs},'
+                f' |wz|<={self._rate_limiter.max_wz_abs})'
                 if self._enable_cmd_vel_relay else '\n  cmd_vel relay: DISABLED'
             )
         )
@@ -184,8 +214,10 @@ class OdomBridge(Node):
         """cmd_vel 中继回调：对 Nav2 输出施加加速度限幅后转发到 /cmd_vel_limiter
 
         限幅范围与 nav2_mujoco.yaml 中 MPPI 的 ax_max/az_max 对齐：
-          max_ax=1.5 m/s²  (MPPI ax_max=1.5)
-          max_az=2.0 rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常跳变)
+          max_ax=1.0 m/s²  (MPPI ax_max=1.0)
+          max_az=1.0 rad/s² (MPPI az_max=1.0)
+          幅值硬限幅 |vx|<=0.45, |wz|<=0.45 —— 拦截任何旁路超速指令
+          (2026-07-14 事故: behavior_server 默认 spin 0.798 rad/s 致摔)
 
         当输入突然归零（如 nav_state_manager 安全停止）时，
         限幅器以 max_ax 的减速度平滑到零，约 0.33s (0.5→0 @1.5m/s²)。
@@ -205,6 +237,14 @@ class OdomBridge(Node):
         out.angular.y = msg.angular.y  # passthrough (恒为 0)
         out.angular.z = wz
         self._cmd_vel_pub.publish(out)
+
+    # ---------- FastLIO 发散检测 ----------
+    # 摔倒等异常会导致 FastLIO2 里程计发散 (位置飞出房间、z 跌落)。
+    # Nav2 costmap 会因 sensor origin 出界而刷屏告警并丧失规划能力。
+    # 此处做两级检测并节流告警，便于测试诊断（不阻断 TF 发布——
+    # 场景判定由 nav_test_runner 的 fall/drift 指标完成）。
+    _ODOM_JUMP_WARN_M = 1.0     # 相邻两帧位置跳变阈值 (FastLIO 10Hz, 0.4m/s → 0.04m/帧)
+    _ODOM_Z_WARN_M = -2.5       # footprint z 低于此值视为定位发散
 
     def odom_callback(self, msg: Odometry):
         """
@@ -235,6 +275,9 @@ class OdomBridge(Node):
         # 直接加 body_to_footprint_z(-1.31) 会让脚底板去到 Z=-1.31（地下）
         # 减去 body_to_footprint_z（即 +1.31）将 odom 系的初始平面拉回地面 Z=0
         footprint_z = pos.z + world_offset[2] - self.body_to_footprint_z
+
+        # ---- FastLIO 发散检测 (节流告警, 不阻断 TF) ----
+        self._check_odom_sanity(footprint_x, footprint_y, footprint_z)
 
         # 使用当前仿真时间而非 FastLIO2 消息时间作为 TF 时间戳
         # FastLIO2 处理+传输有 ~20-30ms 延迟，若用 msg.header.stamp 会导致 Nav2 控制器
@@ -307,6 +350,24 @@ class OdomBridge(Node):
         odom_msg.twist.covariance = msg.twist.covariance
 
         self.odom_pub.publish(odom_msg)
+
+    def _check_odom_sanity(self, x, y, z):
+        """检测 FastLIO 里程计发散: 相邻帧位置跳变 / z 跌落。"""
+        if not hasattr(self, '_last_odom_xy'):
+            self._last_odom_xy = (x, y)
+            return
+        dx = x - self._last_odom_xy[0]
+        dy = y - self._last_odom_xy[1]
+        jump = (dx * dx + dy * dy) ** 0.5
+        if jump > self._ODOM_JUMP_WARN_M:
+            self.get_logger().warn(
+                f'[FastLIO 发散?] 相邻帧位置跳变 {jump:.2f}m '
+                f'({self._last_odom_xy} -> ({x:.2f},{y:.2f}))', throttle_duration_sec=2.0)
+        if z < self._ODOM_Z_WARN_M:
+            self.get_logger().warn(
+                f'[FastLIO 发散?] footprint z={z:.2f}m 低于阈值 {self._ODOM_Z_WARN_M}m',
+                throttle_duration_sec=5.0)
+        self._last_odom_xy = (x, y)
 
     # def _keepalive_callback(self):
     #     if self._last_footprint_x is None:

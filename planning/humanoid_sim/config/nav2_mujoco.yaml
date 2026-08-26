@@ -40,6 +40,11 @@ bt_navigator:
     odom_topic: /odom
     bt_loop_duration: 20
     default_server_timeout: 20
+    # 自定义保守 BT: Recovery 只做 [清代价地图+等待], 无 Spin/BackUp
+    # (默认 BT 的 spin 0.798 rad/s 曾致人形摔倒 → FastLIO 发散, 2026-07-14)
+    # 占位值 "default" 由 launch/navigation.launch.py 的 RewrittenYaml 改写为
+    # 安装目录下的绝对路径 (yaml 不支持包路径替换)
+    default_nav_to_pose_bt_xml: "default"
 
 # --- 控制器服务器 (MPPI) ---
 controller_server:
@@ -59,12 +64,12 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.15
-      movement_time_allowance: 20.0
+      required_movement_radius: 0.10     # RL 低速时缓慢挪动也算有进度
+      movement_time_allowance: 30.0      # 20→30s: RL 跟踪带宽低, 起步/转向慢, 避免误判停滞
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.35
+      xy_goal_tolerance: 0.20            # 严格验收: 测试判据 |err|≤0.25m, Nav2 停车须更紧
       yaw_goal_tolerance: 0.35
       stateful: True
 
@@ -75,20 +80,20 @@ controller_server:
       primary_controller: "nav2_mppi_controller::MPPIController"
       angular_dist_threshold: 2.785  # ~160°：仅目标几乎在正后方时触发原地旋转，其余转向交给 MPPI 走弧形，避免走廊提前拐弯
       forward_sampling_distance: 1.5   # 0.5 → 1.5：目标在身后时路径弯曲，0.5m采样点角度不稳定，扩大采样距离使 Shim 触发更可靠
-      rotate_to_heading_angular_vel: 0.4   # 与 wz_max 一致
-      max_angular_accel: 2.0
+      rotate_to_heading_angular_vel: 0.3   # 低于 wz_max: 原地旋转更保守
+      max_angular_accel: 0.8               # 2.0→0.8: 旋转加速度与人形步态匹配
       simulate_ahead_time: 1.0
       time_steps: 32
       model_dt: 0.1                   # 与 controller_frequency=10Hz 的控制周期(100ms)匹配，MPPI 要求 model_dt ≥ 控制周期
       batch_size: 600
       vx_std: 0.15
       vy_std: 0.0                     # 差速模型不需要 Y 方向采样
-      wz_std: 0.4               # 提供足够旋转采样空间以纠正朝向偏差
+      wz_std: 0.30              # 0.4→0.30: 减弱旋转采样方差, 缓和 wz 饱和抖动
       vx_max: 0.4                     # MuJoCo X1 安全步行速度上限
-      vx_min: -0.1
+      vx_min: 0.0                     # 人形后退不稳, 禁止倒车采样
       vy_max: 0.0
-      wz_max: 0.4                     # 严格限制转速，人形机器人稳定上限；>0.4易步态失稳
-      iteration_count: 1
+      wz_max: 0.35                    # 0.4→0.35: 严格限制转速, 持续饱和旋转跟踪差
+      iteration_count: 2              # 1→2: 提高收敛质量, 减少起步阶段指令抖动(0/饱和交替)
       prune_distance: 0.8
       transform_tolerance: 0.5        # 增大(原0.1), 适配低RTF下TF延迟
       temperature: 0.3               # 降低探索随机性，提高路径跟随精度
@@ -238,8 +243,9 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0      # 10.0 → 4.0：降低梯度陡峭度，防止MPPI在狭窄通道产生高频振荡wz指令导致摔倒
-        inflation_radius: 0.7         # 0.6 → 0.7：增大膨胀半径，使机器人远离高障碍物盲区边缘
+        cost_scaling_factor: 3.5      # 降低梯度陡峭度，防止MPPI在狭窄通道产生高频振荡wz指令导致摔倒
+        inflation_radius: 0.55        # 0.7→0.55: 通道A物理宽1.0m (robot_radius 0.30 → lethal 后余 0.4m);
+                                     # 旧静态地图通道被画窄 0.3m (已重生成修复); 0.55 恢复合理走廊
 
 # ==================== 全局代价地图 ====================
 global_costmap:
@@ -298,7 +304,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.7        # 0.55 → 0.65：缩小与局部地图(0.7)的差距，减少全局/局部规划分裂，同时保留局部安全边际
+        inflation_radius: 0.55       # 与局部 inflation 一致, 消除全局/局部可行域分裂
 
 # --- 地图服务器 ---
 map_server:
@@ -316,6 +322,55 @@ planner_server:
       tolerance: 0.5
       use_astar: True
       allow_unknown: true
+
+# --- 行为服务器 (保守配置) ---
+# 注意: 当前 BT (behavior_trees/humanoid_navigate_w_replanning.xml) 不调用
+# spin/backup —— 此处的限速参数是纵深防御: 即使 BT 误调用/换回默认 BT,
+# 转速也被钳制在人形安全范围内 (默认参数 0.798 rad/s 曾致摔, 见 2026-07-14 事故)
+behavior_server:
+  ros__parameters:
+    use_sim_time: True
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    global_frame: odom
+    robot_base_frame: base_link
+    transform_tolerance: 0.5
+    simulate_ahead_time: 1.0
+    # 人形安全限速 (与 odom_bridge 幅值硬限幅一致)
+    max_rotational_vel: 0.3
+    min_rotational_vel: 0.1
+    rotational_acc_lim: 0.5
+    # DriveOnHeading/BackUp 限速 (BT 不调用, 仅防御)
+    speed_multiplier: 0.5
+
+# --- 速度平滑器 (关键修复, 必须显式配置!) ---
+# Humble navigation_launch.py 链路: controller /cmd_vel → remap /cmd_vel_nav
+#   → velocity_smoother → /cmd_vel → odom_bridge → /cmd_vel_limiter → RL
+# 默认参数 deadband_velocity=[0.1,0.1,0.2] 会把 MPPI 的低速指令 (|vx|<0.1
+# 或 |wz|<0.2) 直接清零 —— 2026-07-14 CI 中机器人 16s 只前进 0.23m 的元凶。
+# 此处 deadband 归零 + 限速与 MPPI/odom_bridge 对齐。
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.45, 0.0, 0.45]
+    min_velocity: [0.0, 0.0, -0.45]
+    max_accel: [1.0, 0.0, 1.0]
+    max_decel: [-1.0, 0.0, -1.0]
+    odom_topic: "odom"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
 
 # --- Lifecycle Manager (缩短 bond 超时，加速 Ctrl+C 关闭) ---
 lifecycle_manager_navigation:

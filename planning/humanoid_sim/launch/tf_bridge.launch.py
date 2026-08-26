@@ -32,9 +32,14 @@ def generate_launch_description():
                 'enable_cmd_vel_relay': True,
                 'cmd_vel_input_topic': '/cmd_vel',
                 'cmd_vel_output_topic': '/cmd_vel_limiter',
-                'max_ax': 1.5,    # m/s²  (MPPI ax_max=1.5)
+                'max_ax': 1.0,    # m/s²  (MPPI ax_max=1.0)
                 'max_ay': 0.5,    # m/s²  (侧步保守值，DiffDrive vy=0 不触发)
-                'max_az': 2.0,    # rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常)
+                'max_az': 1.0,    # rad/s² (MPPI az_max=1.0)
+                # 幅值硬限幅 —— 人形安全上限, 拦截任何旁路超速指令
+                # (behavior_server 默认 spin 0.798 rad/s 曾直接导致摔倒, 2026-07-14)
+                'max_vx_abs': 0.45,   # m/s
+                'max_vy_abs': 0.1,    # m/s
+                'max_wz_abs': 0.45,   # rad/s
             }]
         ),
 

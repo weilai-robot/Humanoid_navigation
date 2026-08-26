@@ -29,6 +29,7 @@ install(DIRECTORY
   config
   maps
   rviz_cfg
+  behavior_trees
   DESTINATION share/${PROJECT_NAME}
 )
 
