@@ -348,8 +348,7 @@ behavior_server:
     max_rotational_vel: 0.3
     min_rotational_vel: 0.1
     rotational_acc_lim: 0.5
-    # DriveOnHeading/BackUp 限速 (BT 不调用, 仅防御)
-    speed_multiplier: 0.5
+    linear_acc_lim: 1.0    # DriveOnHeading/BackUp 用 (BT 不调用, 仅防御)
 
 # --- 速度平滑器 (关键修复, 必须显式配置!) ---
 # Humble navigation_launch.py 链路: controller /cmd_vel → remap /cmd_vel_nav

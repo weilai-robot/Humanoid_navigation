@@ -17,6 +17,13 @@ def generate_launch_description():
     # 保守行为树: Recovery 仅 [清代价地图+等待], 无 Spin/BackUp
     # (默认 BT 的 spin 0.798 rad/s 曾致人形摔倒 → FastLIO 发散, 2026-07-14 CI 事故)
     bt_xml_file = os.path.join(pkg_humanoid, 'behavior_trees', 'humanoid_navigate_w_replanning.xml')
+    if not os.path.isfile(bt_xml_file):
+        # 增量构建可能未安装 behavior_trees 目录 — 回退默认 BT 而非让
+        # bt_navigator 因文件缺失崩溃 (默认 BT 的 spin 已被 behavior_server
+        # 限速 0.3 rad/s + velocity_smoother deadband=0 兜底)
+        print(f'[navigation.launch] WARNING: BT 文件缺失: {bt_xml_file}, '
+              f'回退 Nav2 默认 BT (须重建 humanoid_sim 安装 behavior_trees)')
+        bt_xml_file = 'default'
 
     # 用 RewrittenYaml 注入运行期参数 (yaml 不支持包路径替换, 须在此改写):
     #   - default_nav_to_pose_bt_xml: 自定义保守 BT 的绝对路径
