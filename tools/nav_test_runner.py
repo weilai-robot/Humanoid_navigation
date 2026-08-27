@@ -4,15 +4,21 @@ nav_test_runner.py — 导航仿真自动化测试 + 指标计算
 
 用法:
   # 前提: run_mujoco_nav.sh 已启动, 机器人已切到 walk_mode
-  python3 nav_test_runner.py --goal-x 5.0 --goal-y 0.0 --timeout 60
+  python3 nav_test_runner.py --goal-x 5.0 --goal-y 0.0 --timeout 120
 
   # 批量跑多个场景
   python3 nav_test_runner.py --batch
 
-输出:
-  reports/<scenario>_<timestamp>.json   — 结构化结果
-  reports/<scenario>_<timestamp>.md     — 可读报告
-  reports/latest.json                   — 最新结果软链
+输出 (每次试验一个子目录):
+  reports/<scenario>_<timestamp>/
+    result.json       — 汇总指标
+    report.md         — 可读报告
+    timeseries.json   — 逐帧 GT/odom/cmd_vel
+    gt.csv / odom.csv / odom_gt_paired.csv / cmd_vel.csv
+    pidstat.log       — 可选
+  reports/latest → 最近一次试验目录
+
+Ctrl+C: 中断后仍会把已采集数据写入上述目录 (result_status=INTERRUPTED)。
 
 指标:
   P0: 摔倒率, 碰撞次数
@@ -22,6 +28,7 @@ nav_test_runner.py — 导航仿真自动化测试 + 指标计算
 """
 
 import argparse
+import csv
 import json
 import math
 import os
@@ -165,12 +172,17 @@ class MetricsCalculator:
         else:
             m["completion_time_s"] = None
 
-        # 路径效率: 直线距离 / 累计位移
+        # 路径效率: 直线距离 / 本 trial 内累计位移(非仿真终身累计)
         if len(self.gt_data) >= 2:
             start_x, start_y = self.gt_data[0][1], self.gt_data[0][2]
             straight_dist = math.sqrt((goal_x - start_x)**2 + (goal_y - start_y)**2)
-            cum_dist = final_gt[9]
-            m["path_efficiency"] = round(straight_dist / max(cum_dist, 0.01), 3) if cum_dist > 0.01 else None
+            first_cum = self.gt_data[0][9]
+            trial_dist = final_gt[9] - first_cum  # BUG-1 修: 本 trial 窗口内的位移, 非终身累计
+            if trial_dist > 0.01:
+                eff = straight_dist / trial_dist
+                m["path_efficiency"] = round(min(max(eff, 0.0), 1.0), 3)  # clip [0, 1]
+            else:
+                m["path_efficiency"] = None  # 没动, 不算
         else:
             m["path_efficiency"] = None
 
@@ -204,6 +216,115 @@ class MetricsCalculator:
         m["timed_out"] = (m.get("completion_time_s") or 0) >= timeout_sec * 0.95
 
         return m
+
+    def extract_diagnostics(self, goal_x: float, goal_y: float,
+                            result_status: str = None) -> dict:
+        """提取降采样时序数据 + 事件时间线，供 Agent 诊断"""
+        MAX_POINTS = 120  # 降采样到 ≤120 点，控制 JSON 体积
+
+        def downsample(data, max_pts=MAX_POINTS):
+            if len(data) <= max_pts:
+                return data
+            stride = len(data) / max_pts
+            return [data[int(i * stride)] for i in range(max_pts)]
+
+        diag = {}
+
+        # ── 轨迹 (GT + odom) ──────────────────────────
+        gt_traj = [[round(d[0], 2), round(d[1], 3), round(d[2], 3),
+                     round(d[3], 3), round(math.degrees(d[4]), 1),
+                     round(math.degrees(d[5]), 1), round(math.degrees(d[6]), 1)]
+                    for d in downsample(self.gt_data)]
+        diag["trajectory_gt"] = gt_traj
+
+        odom_traj = [[round(d[0], 2), round(d[1], 3), round(d[2], 3)]
+                      for d in downsample(self.odom_paired_data)]
+        diag["trajectory_odom"] = [[d[0], d[3], d[4]] for d in downsample(self.odom_paired_data)]
+
+        # ── 漂移曲线 ──────────────────────────────────
+        drift_curve = [[d[0], round(d[5], 3)] for d in downsample(self.odom_paired_data)]
+        diag["drift_curve"] = drift_curve
+
+        # ── cmd_vel 曲线 ──────────────────────────────
+        if self.goal_sent_time:
+            t0 = self.goal_sent_time
+            cmd_curve = [[round(d[0] - t0, 2), round(d[1], 3), round(d[3], 3)]
+                         for d in downsample(self.cmd_vel_data)]
+        else:
+            cmd_curve = [[round(d[0], 2), round(d[1], 3), round(d[3], 3)]
+                         for d in downsample(self.cmd_vel_data)]
+        diag["cmd_vel_curve"] = cmd_curve
+
+        # ── 速度曲线 (GT 差分) ────────────────────────
+        vel_curve = []
+        ds_gt = downsample(self.gt_data)
+        for i in range(1, len(ds_gt)):
+            dt = ds_gt[i][0] - ds_gt[i-1][0]
+            if dt < 1e-6:
+                continue
+            dx = ds_gt[i][1] - ds_gt[i-1][1]
+            dy = ds_gt[i][2] - ds_gt[i-1][2]
+            v = math.sqrt(dx*dx + dy*dy) / dt
+            vel_curve.append([round(ds_gt[i][0], 2), round(v, 3)])
+        diag["velocity_curve"] = vel_curve
+
+        # ── 事件时间线 ────────────────────────────────
+        events = []
+        if self.gt_data:
+            events.append({"t": round(self.gt_data[0][0], 2), "type": "test_start",
+                           "desc": f"pos=({self.gt_data[0][1]:.2f},{self.gt_data[0][2]:.2f})"})
+        if self.goal_sent_time and self.gt_data:
+            # 找到最近的 GT 帧
+            nearest = min(self.gt_data, key=lambda g: abs(g[0] - 0))  # sim_time ~0 at goal
+            events.append({"t": round(nearest[0], 2), "type": "goal_sent",
+                           "desc": f"goal=({goal_x:.1f},{goal_y:.1f})"})
+        if self.first_motion_time and self.gt_data:
+            events.append({"t": "plan_done", "type": "first_motion",
+                           "desc": f"plan_time={self.first_motion_time - self.goal_sent_time:.2f}s"})
+        # 摔倒时刻
+        if self.fall_detected:
+            for d in self.gt_data:
+                z, roll, pitch = d[3], abs(d[4]), abs(d[5])
+                if z < self.FALL_Z_THRESHOLD or roll > self.FALL_ANGLE_THRESHOLD or pitch > self.FALL_ANGLE_THRESHOLD:
+                    events.append({"t": round(d[0], 2), "type": "fall",
+                                   "desc": f"z={z:.2f}m roll={math.degrees(roll):.0f}° pitch={math.degrees(pitch):.0f}°"})
+                    break
+        # Nav2 结果
+        if result_status:
+            end_t = self.gt_data[-1][0] if self.gt_data else 0
+            events.append({"t": round(end_t, 2), "type": "nav_result",
+                           "desc": result_status})
+
+        diag["events"] = events
+
+        # ── 摔倒分析 ──────────────────────────────────
+        if self.fall_detected and len(self.gt_data) > 2:
+            fall_frame = None
+            for d in self.gt_data:
+                z, roll, pitch = d[3], abs(d[4]), abs(d[5])
+                if z < self.FALL_Z_THRESHOLD or roll > self.FALL_ANGLE_THRESHOLD or pitch > self.FALL_ANGLE_THRESHOLD:
+                    fall_frame = d
+                    break
+            if fall_frame:
+                idx = self.gt_data.index(fall_frame)
+                pre_fall = self.gt_data[max(0, idx-5):idx+1]
+                vel_before = []
+                for i in range(1, len(pre_fall)):
+                    dt = pre_fall[i][0] - pre_fall[i-1][0]
+                    if dt > 1e-6:
+                        dx = pre_fall[i][1] - pre_fall[i-1][1]
+                        dy = pre_fall[i][2] - pre_fall[i-1][2]
+                        vel_before.append(round(math.sqrt(dx*dx + dy*dy) / dt, 3))
+                diag["fall_analysis"] = {
+                    "fall_time_s": round(fall_frame[0], 2),
+                    "fall_pos": [round(fall_frame[1], 2), round(fall_frame[2], 2)],
+                    "fall_z_m": round(fall_frame[3], 3),
+                    "fall_pitch_deg": round(math.degrees(fall_frame[5]), 1),
+                    "fall_roll_deg": round(math.degrees(fall_frame[4]), 1),
+                    "velocity_before_fall": vel_before,  # 摔倒前 5 帧速度
+                }
+
+        return diag
 
     def _compute_velocity_stats(self) -> dict:
         """从 GT 轨迹逐帧差分计算实际线速度统计"""
@@ -534,6 +655,123 @@ def format_report(scenario_name: str, scenario_desc: str, params: dict,
     return "\n".join(lines)
 
 
+def export_timeseries(metrics: MetricsCalculator, trial_dir: str) -> dict:
+    """将内存中的逐帧数据落盘到 trial_dir (JSON + CSV)。"""
+    ts = {
+        "ground_truth": {
+            "columns": ["sim_t", "x", "y", "z", "roll", "pitch", "yaw", "rtf", "collisions", "cum_dist"],
+            "count": len(metrics.gt_data),
+            "rows": [list(r) for r in metrics.gt_data],
+        },
+        "odometry": {
+            "columns": ["sim_t", "x", "y"],
+            "count": len(metrics.odom_data),
+            "rows": [list(r) for r in metrics.odom_data],
+        },
+        "odom_gt_paired": {
+            "columns": ["sim_t", "gt_x", "gt_y", "odom_x", "odom_y", "drift_xy_m"],
+            "count": len(metrics.odom_paired_data),
+            "rows": [list(r) for r in metrics.odom_paired_data],
+        },
+        "cmd_vel": {
+            "columns": ["wall_t", "vx", "vy", "wz"],
+            "count": len(metrics.cmd_vel_data),
+            "rows": [list(r) for r in metrics.cmd_vel_data],
+        },
+    }
+    if metrics.goal_sent_time is not None:
+        ts["meta"] = {
+            "goal_sent_wall_t": metrics.goal_sent_time,
+            "first_motion_wall_t": metrics.first_motion_time,
+        }
+
+    json_path = os.path.join(trial_dir, "timeseries.json")
+    with open(json_path, "w") as f:
+        json.dump(ts, f, indent=2, ensure_ascii=False)
+
+    csv_map = {
+        "ground_truth": "gt.csv",
+        "odometry": "odom.csv",
+        "odom_gt_paired": "odom_gt_paired.csv",
+        "cmd_vel": "cmd_vel.csv",
+    }
+    csv_paths = []
+    for key, filename in csv_map.items():
+        section = ts[key]
+        if section["count"] == 0:
+            continue
+        csv_path = os.path.join(trial_dir, filename)
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(section["columns"])
+            writer.writerows(section["rows"])
+        csv_paths.append(csv_path)
+
+    return {"json": json_path, "csv": csv_paths}
+
+
+def update_latest_symlink(report_dir: str, trial_dir: str) -> None:
+    """reports/latest → 本次试验目录。"""
+    link_path = os.path.join(report_dir, "latest")
+    if os.path.islink(link_path) or os.path.exists(link_path):
+        os.remove(link_path)
+    os.symlink(os.path.basename(trial_dir), link_path)
+
+
+def write_trial_report(scenario_name: str, params: dict, metrics: dict,
+                       metrics_calc: MetricsCalculator, trial_dir: str,
+                       report_dir: str, timestamp: str,
+                       diagnostics: dict | None = None) -> dict:
+    """把单次试验的汇总 + 时序写入 trial_dir，并更新 latest 软链。
+
+    diagnostics: main 侧 Agent/CI 用的降采样诊断（可选）。
+    """
+    os.makedirs(trial_dir, exist_ok=True)
+
+    report_path = os.path.join(trial_dir, "report.md")
+    json_path = os.path.join(trial_dir, "result.json")
+
+    report_md = format_report(scenario_name, params["desc"], params, metrics, timestamp)
+    with open(report_path, "w") as f:
+        f.write(report_md)
+
+    full_result = {
+        "scenario": scenario_name,
+        "description": params["desc"],
+        "timestamp": timestamp,
+        "trial_dir": trial_dir,
+        "params": {
+            "goal_x": params["goal_x"],
+            "goal_y": params["goal_y"],
+            "goal_yaw_deg": math.degrees(params["goal_yaw"]),
+            "timeout": params["timeout"],
+        },
+        "metrics": metrics,
+    }
+    if diagnostics is not None:
+        full_result["diagnostics"] = diagnostics
+    with open(json_path, "w") as f:
+        json.dump(full_result, f, indent=2, ensure_ascii=False)
+
+    ts_paths = export_timeseries(metrics_calc, trial_dir)
+    with open(report_path, "a") as f:
+        f.write("\n## 原始时序数据\n\n")
+        f.write(f"- `timeseries.json` — GT / Odometry / 配对漂移 / cmd_vel\n")
+        for csv_path in ts_paths["csv"]:
+            f.write(f"- `{os.path.basename(csv_path)}`\n")
+        f.write("\n")
+
+    update_latest_symlink(report_dir, trial_dir)
+    full_result["_paths"] = {
+        "trial_dir": trial_dir,
+        "report": report_path,
+        "json": json_path,
+        "timeseries": ts_paths["json"],
+        "csv": ts_paths["csv"],
+    }
+    return full_result
+
+
 # ═══════════════════════════════════════════════════════════
 #  CPU/内存采样 (可选)
 # ═══════════════════════════════════════════════════════════
@@ -605,11 +843,16 @@ def parse_pidstat(filepath: str) -> dict:
 # ═══════════════════════════════════════════════════════════
 
 def run_single_test(scenario_name: str, params: dict, report_dir: str) -> dict:
-    """执行单个测试场景"""
+    """执行单个测试场景；每次试验写入独立子目录。Ctrl+C 仍会落盘。"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    trial_dir = os.path.join(report_dir, f"{scenario_name}_{timestamp}")
+    os.makedirs(trial_dir, exist_ok=True)
+
     print(f"\n{'='*60}")
     print(f"  场景: {scenario_name} — {params['desc']}")
     print(f"  目标: ({params['goal_x']:.1f}, {params['goal_y']:.1f}, yaw={math.degrees(params['goal_yaw']):.0f}°)")
     print(f"  超时: {params['timeout']}s")
+    print(f"  输出: {trial_dir}")
     print(f"{'='*60}\n")
 
     rclpy.init()
@@ -617,82 +860,101 @@ def run_single_test(scenario_name: str, params: dict, report_dir: str) -> dict:
         params["goal_x"], params["goal_y"], params["goal_yaw"], params["timeout"]
     )
 
-    # CPU/内存采样
-    pidstat_path = os.path.join(report_dir, f"{scenario_name}_pidstat.log")
+    # Ctrl+C / SIGTERM → 标记结束，走正常落盘路径 (不抛 KeyboardInterrupt 丢数据)
+    def _request_stop(status: str):
+        if not node.finished:
+            print(f"\n  ⚠ {status} — 中断采集，正在保存已有数据...")
+            node.result_status = status
+            node.finished = True
+            if node.metrics.end_time is None:
+                node.metrics.end_time = time.monotonic()
+
+    def _on_signal(signum, _frame):
+        name = "INTERRUPTED" if signum == signal.SIGINT else "TERMINATED"
+        _request_stop(name)
+
+    prev_sigint = signal.signal(signal.SIGINT, _on_signal)
+    prev_sigterm = signal.signal(signal.SIGTERM, _on_signal)
+
+    pidstat_path = os.path.join(trial_dir, "pidstat.log")
     pidstat_proc = start_pidstat(pidstat_path)
-
-    # 等待 ground truth 数据流 (5s 超时)
-    print("[1/4] 等待 ground truth 数据流...")
     spin_start = time.monotonic()
-    while len(node.metrics.gt_data) == 0:
-        rclpy.spin_once(node, timeout_sec=0.1)
-        if time.monotonic() - spin_start > 10:
-            print("  ❌ 10s 内未收到 /mujoco/ground_truth, 请确认 sim_module 已启动并切到 walk_mode")
-            node.destroy_node()
-            rclpy.shutdown()
-            return {"scenario": scenario_name, "success": False, "error": "no_gt_data"}
-    print("  ✓ ground truth 数据流正常")
+    early_error = None
 
-    # 发送导航目标
-    print("[2/4] 发送导航目标...")
-    node.send_goal()
+    try:
+        # 等待 ground truth 数据流
+        print("[1/4] 等待 ground truth 数据流...")
+        while len(node.metrics.gt_data) == 0 and not node.finished:
+            rclpy.spin_once(node, timeout_sec=0.1)
+            if time.monotonic() - spin_start > 10:
+                print("  ❌ 10s 内未收到 /mujoco/ground_truth, 请确认 sim_module 已启动并切到 walk_mode")
+                early_error = "no_gt_data"
+                node.result_status = "NO_GT"
+                node.finished = True
+                break
+        if early_error is None and not node.finished:
+            print("  ✓ ground truth 数据流正常")
 
-    # 等待完成或超时
-    print(f"[3/4] 等待导航完成 (最长 {params['timeout']}s)...")
-    while not node.finished:
-        rclpy.spin_once(node, timeout_sec=0.5)
-        # 进度显示
-        if len(node.metrics.gt_data) > 0:
-            latest = node.metrics.gt_data[-1]
-            sim_t = latest[0]
-            cx, cy = latest[1], latest[2]
-            dist = math.sqrt((cx - params["goal_x"])**2 + (cy - params["goal_y"])**2)
-            elapsed_wall = time.monotonic() - spin_start
-            print(f"\r  sim_t={sim_t:.1f}s  pos=({cx:.2f},{cy:.2f})  dist={dist:.2f}m  wall={elapsed_wall:.0f}s",
-                  end="", flush=True)
+            print("[2/4] 发送导航目标...")
+            node.send_goal()
 
-    print()  # 换行
+            print(f"[3/4] 等待导航完成 (最长 {params['timeout']}s, Ctrl+C 可提前结束并保存)...")
+            while not node.finished:
+                rclpy.spin_once(node, timeout_sec=0.5)
+                if len(node.metrics.gt_data) > 0:
+                    latest = node.metrics.gt_data[-1]
+                    sim_t = latest[0]
+                    cx, cy = latest[1], latest[2]
+                    dist = math.sqrt((cx - params["goal_x"])**2 + (cy - params["goal_y"])**2)
+                    elapsed_wall = time.monotonic() - spin_start
+                    print(f"\r  sim_t={sim_t:.1f}s  pos=({cx:.2f},{cy:.2f})  dist={dist:.2f}m  wall={elapsed_wall:.0f}s",
+                          end="", flush=True)
+            print()
+    except KeyboardInterrupt:
+        # 极少情况: 信号处理器未接管时兜底
+        _request_stop("INTERRUPTED")
+    finally:
+        signal.signal(signal.SIGINT, prev_sigint)
+        signal.signal(signal.SIGTERM, prev_sigterm)
+        if pidstat_proc:
+            try:
+                pidstat_proc.terminate()
+                pidstat_proc.wait(timeout=3)
+            except Exception:
+                pass
 
-    # 停止 pidstat
-    if pidstat_proc:
-        pidstat_proc.terminate()
-        pidstat_proc.wait(timeout=3)
-
-    # 计算指标
-    print("[4/4] 计算指标...")
+    # 计算并落盘 (含 Ctrl+C / 无 GT 的提前结束)
+    print("[4/4] 计算指标并保存...")
+    if node.metrics.end_time is None:
+        node.metrics.end_time = time.monotonic()
     metrics = node.metrics.compute_metrics(params["goal_x"], params["goal_y"], params["timeout"])
-    metrics["result_status"] = node.result_status
+    metrics["result_status"] = node.result_status or ("INTERRUPTED" if early_error is None else "NO_GT")
+    if early_error:
+        metrics["error_reason"] = early_error
 
-    # CPU/内存
+    # 提取诊断时序数据 (轨迹、漂移曲线、事件时间线) — 供 CI/Agent
+    diagnostics = node.metrics.extract_diagnostics(
+        params["goal_x"], params["goal_y"], node.result_status)
+
     cpu_mem = parse_pidstat(pidstat_path) if os.path.exists(pidstat_path) else {}
     metrics["cpu_mem"] = cpu_mem
 
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        node.destroy_node()
+    except Exception:
+        pass
+    try:
+        if rclpy.ok():
+            rclpy.shutdown()
+    except Exception:
+        pass
 
-    # 生成报告
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    report_path = os.path.join(report_dir, f"{scenario_name}_{timestamp}.md")
-    json_path = os.path.join(report_dir, f"{scenario_name}_{timestamp}.json")
-
-    report_md = format_report(scenario_name, params["desc"], params, metrics, timestamp)
-    with open(report_path, "w") as f:
-        f.write(report_md)
-
-    full_result = {
-        "scenario": scenario_name,
-        "description": params["desc"],
-        "timestamp": timestamp,
-        "params": {
-            "goal_x": params["goal_x"],
-            "goal_y": params["goal_y"],
-            "goal_yaw_deg": math.degrees(params["goal_yaw"]),
-            "timeout": params["timeout"],
-        },
-        "metrics": metrics,
-    }
-    with open(json_path, "w") as f:
-        json.dump(full_result, f, indent=2, ensure_ascii=False)
+    # 试验目录落盘（hmj）+ diagnostics 写入 result.json（main）
+    full_result = write_trial_report(
+        scenario_name, params, metrics, node.metrics, trial_dir, report_dir, timestamp,
+        diagnostics=diagnostics,
+    )
+    paths = full_result.pop("_paths")
 
     # 控制台摘要
     print(f"\n{'─'*60}")
@@ -713,8 +975,12 @@ def run_single_test(scenario_name: str, params: dict, report_dir: str) -> dict:
         for proc, stats in cpu_mem.items():
             print(f"    {proc}: CPU {stats['cpu_mean_pct']}% (peak {stats['cpu_max_pct']}%), RSS {stats['rss_peak_mb']}MB")
     print(f"{'─'*60}")
-    print(f"  报告: {report_path}")
-    print(f"  JSON: {json_path}")
+    print(f"  试验目录: {paths['trial_dir']}")
+    print(f"  报告: {paths['report']}")
+    print(f"  JSON: {paths['json']}")
+    print(f"  时序: {paths['timeseries']}")
+    if paths["csv"]:
+        print(f"  CSV:  {', '.join(os.path.basename(p) for p in paths['csv'])}")
     print()
 
     return full_result
@@ -725,7 +991,7 @@ def main():
     parser.add_argument("--goal-x", type=float, default=5.0, help="目标 X (m)")
     parser.add_argument("--goal-y", type=float, default=0.0, help="目标 Y (m)")
     parser.add_argument("--goal-yaw", type=float, default=0.0, help="目标朝向 (rad)")
-    parser.add_argument("--timeout", type=float, default=60, help="超时 (s)")
+    parser.add_argument("--timeout", type=float, default=120, help="超时 (s)")
     parser.add_argument("--scenario", type=str, default=None,
                         help="预定义场景名 (A_straight_5m, C_narrow_passage, ...)")
     parser.add_argument("--batch", action="store_true", help="批量运行所有场景")
