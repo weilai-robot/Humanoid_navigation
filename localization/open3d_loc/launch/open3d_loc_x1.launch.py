@@ -50,7 +50,15 @@ def generate_launch_description():
         package='tf2_ros',
         executable='static_transform_publisher',
         name='imulink2baselink',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'imu_link', 'base_link']
+        # 方向修正 (对齐 open3d_loc_x1_real.launch.py 的教训):
+        # parent=base_link, child=imu_link — 让 imu_link 挂在 base_link 下。
+        # 旧方向 (imu_link→base_link) 双重错误: base_link 争父 (tf_bridge 已发
+        # base_footprint→base_link, 双父被 TF 拒) + imu_link 成无父根从 map 不可
+        # 达 → lookupTransform("base_link","imu_link") 报 "imu_link does not
+        # exist" → map→odom 不发布 → 全局 costmap 无 robot pose → NavFn 无法
+        # 规划 (run 33034736667: failed to create plan, 机器人静止 0/6)。
+        # lookupTransform 支持沿 edge 反向遍历, base_link→imu_link 同样满足查询。
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'base_link', 'imu_link']
     )
 
     static_tf_base_center = Node(
