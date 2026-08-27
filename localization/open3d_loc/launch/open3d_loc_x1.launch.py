@@ -39,12 +39,13 @@ def generate_launch_description():
     )
     map_file = LaunchConfiguration('map_file')
 
-    static_tf_camera_init2odom = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='camera_init2odom',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'odom', 'camera_init']
-    )
+    # 已删除 static odom->camera_init (原 camera_init2odom 节点):
+    # tf_bridge.launch.py 已发 map->camera_init (z=1.05), 本节点再加 odom->camera_init
+    # 会给 camera_init 造成双父 → tf2 "two or more unconnected trees" 撕裂
+    # (run 33036512784: local costmap 'Could not find a connection between
+    # odom and base_link' 间歇出现, 机器人 A-D 场景静止 E-F 才动)。
+    # map->odom 由 global_localization.cpp 动态发布 (ICP 对齐), cpp 只查
+    # base_link->imu_link, 不依赖 odom->camera_init, 删除安全。
 
     static_tf_imulink2baselink = Node(
         package='tf2_ros',
