@@ -219,6 +219,13 @@ local_costmap:
         cloud_mark:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
+          # 观测时间戳容忍: FastLIO 点云 stamp=lidar_end_time (处理延迟+
+          # RTF<1 积压), 与 TF 缓存窗口错位导致 "Message Filter dropping
+          # message: frame body ... earlier than all data in transform cache"
+          # — 观测全丢 → 局部 costmap 对动态障碍失明 (CI 943ff27: 每场景
+          # 1 次碰撞 + A 场景 86.7s 绕圈)。2s 等待窗口覆盖实测最大抖动
+          # (Odometry hz min 0.05s max 0.86s)。
+          transform_tolerance: 2.0
           max_obstacle_height: 0.2
           min_obstacle_height: -1.1
           clearing: False
@@ -228,6 +235,7 @@ local_costmap:
         cloud_clear:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
+          transform_tolerance: 2.0
           max_obstacle_height: 0.2
           min_obstacle_height: -1.1
           clearing: True
@@ -286,6 +294,7 @@ global_costmap:
         pointcloud:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
+          transform_tolerance: 2.0     # 同 local cloud_mark — TF/点云时间戳错位容忍
           max_obstacle_height: 0.2
           min_obstacle_height: -1.0
           clearing: True
