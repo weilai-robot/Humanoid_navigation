@@ -46,6 +46,23 @@ def generate_launch_description():
     # odom and base_link' 间歇出现, 机器人 A-D 场景静止 E-F 才动)。
     # map->odom 由 global_localization.cpp 动态发布 (ICP 对齐), cpp 只查
     # base_link->imu_link, 不依赖 odom->camera_init, 删除安全。
+    #
+    # ── 33038266026 复盘: 删除是错的 ──
+    # map->odom 动态发布从未发生: open3d_loc 卡在 "Waiting for
+    # cloud_registered_1" — FastLIO 的 /cloud_registered publisher
+    # (laserMapping.cpp:931) 从未实际 publish (代码路径未触发)。
+    # 上一 run E/F 能走正是靠本静态桥把 odom 挂进 camera_init(map) 子树。
+    # 正确拓扑: camera_init→odom (parent=camera_init) — camera_init 唯一父
+    # = map (z=1.05, tf_bridge), odom 唯一父 = camera_init, 整树单根恒连通:
+    #   map→camera_init→body (FastLIO)
+    #        └→odom→base_footprint→base_link→{lidar_link, imu_link}
+    # 旧方向 (odom 为 parent) 才会造成 camera_init 双父撕裂。
+    static_tf_camera_init2odom = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='camera_init2odom',
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'camera_init', 'odom']
+    )
 
     static_tf_imulink2baselink = Node(
         package='tf2_ros',
@@ -125,8 +142,8 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim_time_arg,
         map_file_arg,
-        # static_tf_camera_init2odom,
-        # static_tf_imulink2baselink,
+        static_tf_camera_init2odom,
+        static_tf_imulink2baselink,
         static_tf_base_center,
         global_localization_node,
         # pointcloud_transformer_node
