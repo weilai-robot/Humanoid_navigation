@@ -4,7 +4,6 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.descriptions import ParameterFile
 from nav2_common.launch import RewrittenYaml
 
 def generate_launch_description():
@@ -25,18 +24,21 @@ def generate_launch_description():
               f'回退 Nav2 默认 BT (须重建 humanoid_sim 安装 behavior_trees)')
         bt_xml_file = 'default'
 
-    # 用 RewrittenYaml 注入运行期参数 (yaml 不支持包路径替换, 须在此改写):
+    # 用 RewrittenYaml 注入运行期参数 (yaml 不支持包路径替换, 须在此改写)。
+    # 注意: 必须把 RewrittenYaml 对象【直接】作为 launch argument 传给
+    # bringup_launch.py (nav2 官方模式; 它是 Substitution, perform 时返回
+    # 改写后的临时 yaml 路径)。不能包 ParameterFile — 那是给
+    # Node(parameters=[...]) 用的, 作为 launch argument 传递会以
+    # "'ParameterFile' object is not iterable" 崩溃 (CI run 33030080681)。
     #   - default_nav_to_pose_bt_xml: 自定义保守 BT 的绝对路径
     #     (RewrittenYaml 按 key 改写 nav2_mujoco.yaml 中的占位值 "default")
-    configured_params = ParameterFile(
-        RewrittenYaml(
-            source_file=params_file,
-            root_key='',
-            param_rewrites={
-                'default_nav_to_pose_bt_xml': bt_xml_file,
-            },
-            convert_types=True),
-        allow_substs=True)
+    configured_params = RewrittenYaml(
+        source_file=params_file,
+        root_key='',
+        param_rewrites={
+            'default_nav_to_pose_bt_xml': bt_xml_file,
+        },
+        convert_types=True)
 
     # ====== 1. 包含 tf_bridge (发布 odom 和 map->camera_init 静态 TF) ======
     tf_bridge_launch = IncludeLaunchDescription(
