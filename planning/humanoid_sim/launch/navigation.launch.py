@@ -1,6 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch_ros.actions import Node
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -54,13 +55,37 @@ def generate_launch_description():
     #     )
     # )
 
-    # ====== 3. 包含 Nav2 核心 (带 AMCL 等) ======
+    # ====== 3. Nav2 核心: 纯导航栈 + 显式 map_server (不用 bringup/AMCL) ======
+    # 关键: bringup_launch.py 会启动 AMCL, 其发布动态 map→odom 与 open3d_loc
+    # 的静态 camera_init→odom 形成 odom 双父 → TF 树间歇撕裂
+    # ("two or more unconnected trees", CI run 33042878544: A-D 场景机器人
+    # 静止, nav2 284 次 TF 超时; E/F 才恢复行走)。
+    # 仿真中地图与世界轴对齐, map→camera_init→odom 静态链即正确定位,
+    # AMCL 完全多余。navigation_launch.py 只含 controller/planner/behavior/
+    # bt_navigator/velocity_smoother 等, 不含 AMCL; map_server 单独启动。
+    map_server_node = Node(
+        package='nav2_map_server',
+        executable='map_server',
+        name='map_server',
+        output='screen',
+        parameters=[{'use_sim_time': True,
+                     'yaml_filename': map_file}],
+    )
+    lifecycle_manager_map = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_map',
+        output='screen',
+        parameters=[{'use_sim_time': True,
+                     'autostart': True,
+                     'node_names': ['map_server']}],
+    )
+
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(pkg_nav2, 'launch', 'bringup_launch.py')
+            os.path.join(pkg_nav2, 'launch', 'navigation_launch.py')
         ),
         launch_arguments={
-            'map': map_file,
             'params_file': configured_params,
             'use_sim_time': 'True',  # true
             'autostart': 'True'
@@ -69,6 +94,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         tf_bridge_launch,
-        # pc2scan_launch,
+        map_server_node,
+        lifecycle_manager_map,
         nav2_launch
     ])
