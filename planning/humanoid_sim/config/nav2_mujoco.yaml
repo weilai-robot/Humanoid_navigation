@@ -78,7 +78,7 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_mppi_controller::MPPIController"
-      angular_dist_threshold: 0.9   # 2.785→0.9 (~52°): 终局裁定后修复 — 步态最小转弯半径 ~1.4m (yawRT 0.70-0.78 实测), 起步大航向差交给 Shim 原地旋转 (vx=0 纯转无曲率需求, rotate_vel 0.3 rad/s), MPPI 只处理 <52° 缓行转向, 从根上避开曲率边界处的持续饱和极限环
+      angular_dist_threshold: 2.785  # 回滚 0.9 实验 (33142518306: 碰撞回归 6 次 vs 基线零, A/B 绕圈依旧) — 最终钉在 89434c4 基线配置 (双零摔倒/碰撞)。步态曲率边界的正解在 motion_control 侧 (见 doc 终局裁定)
       forward_sampling_distance: 1.5   # 0.5 → 1.5：目标在身后时路径弯曲，0.5m采样点角度不稳定，扩大采样距离使 Shim 触发更可靠
       rotate_to_heading_angular_vel: 0.3   # 低于 wz_max: 原地旋转更保守
       max_angular_accel: 0.8               # 2.0→0.8: 旋转加速度与人形步态匹配
