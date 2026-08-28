@@ -327,98 +327,15 @@ planner_server:
     use_sim_time: True
     planner_plugins: ["GridBased"]
     GridBased:
-      # NavFn → SmacPlannerHybrid (46-run 实测定性后的规划侧修复):
-      # NavFn 最短路径在通道A入口产生 ~135° 尖角, 曲率需求超出步态能力
-      # (yawRT 0.70-0.78, 最小转弯半径 ~1.3-1.5m) → MPPI 在尖角处持续
-      # 饱和 → ~1m 极限环绕圈。Hybrid-A* 用 Dubin 运动模型 +
-      # minimum_turning_radius 显式约束, 输出步态运动学可行的平滑路径,
-      # MPPI 跟踪的曲率永不超界 (审核建议的"降低路径曲率需求"正解)。
-      plugin: "nav2_smac_planner/SmacPlannerHybrid"
-      tolerance: 0.25
-      downsample_costmap: false
-      downsampling_factor: 1
+      # 最终回滚到 NavFn (33147080499: Smac Hybrid DUBIN 在此图上 1e6 迭代
+      # 搜不出路径 — 通道A 1.0m 宽 vs 1.4m 最小转弯半径, 混合A*的角度离散
+      # 在窄通道内组合爆炸; NavFn 网格最短路无此限制且 A/B 曾走到中途)。
+      # 曲率不可行问题已知: A 场景大航向差由 RotationShim(0.9rad 原地转)
+      # + MPPI 缓行转向承担; 入口急转点的步态曲率边界问题留档 doc 后记,
+      # 正解需步态侧转向能力 (motion_control, 本轮禁区)。
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: True
       allow_unknown: true
-      max_iterations: 1000000
-      max_on_approach_iterations: 1000
-      max_planning_time: 5.0
-      motion_model_for_search: "DUBIN"
-      angle_quantization_bins: 72
-      analytic_expansion_ratio: 3.5
-      analytic_expansion_max_length: 3.0
-      minimum_turning_radius: 1.4      # 实测步态曲率边界 (vx 0.32 / 有效 wz ~0.23)
-      reverse_penalty: 2.0
-      change_penalty: 0.0
-      non_straight_penalty: 1.2
-      cost_penalty: 2.0
-      retrospective_penalty: 0.0
-      lookup_table_size: 20.0
-      cache_obstacle_heuristic: false
-      smooth_path: true
-      smoother:
-        max_iterations: 1000
-        w_smooth: 0.3
-        w_data: 0.2
-        tolerance: 1.0e-10
-        do_refinement: true
-        refinement_num: 2
 
-# --- 行为服务器 (保守配置) ---
-# 注意: 当前 BT (behavior_trees/humanoid_navigate_w_replanning.xml) 不调用
-# spin/backup —— 此处的限速参数是纵深防御: 即使 BT 误调用/换回默认 BT,
-# 转速也被钳制在人形安全范围内 (默认参数 0.798 rad/s 曾致摔, 见 2026-07-14 事故)
-behavior_server:
-  ros__parameters:
-    use_sim_time: True
-    cycle_frequency: 10.0
-    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
-    spin:
-      plugin: "nav2_behaviors/Spin"
-    backup:
-      plugin: "nav2_behaviors/BackUp"
-    drive_on_heading:
-      plugin: "nav2_behaviors/DriveOnHeading"
-    wait:
-      plugin: "nav2_behaviors/Wait"
-    global_frame: odom
-    robot_base_frame: base_link
-    transform_tolerance: 0.5
-    simulate_ahead_time: 1.0
-    # 人形安全限速 (与 odom_bridge 幅值硬限幅一致)
-    max_rotational_vel: 0.3
-    min_rotational_vel: 0.1
-    rotational_acc_lim: 0.5
-    linear_acc_lim: 1.0    # DriveOnHeading/BackUp 用 (BT 不调用, 仅防御)
 
-# --- 速度平滑器 (关键修复, 必须显式配置!) ---
-# Humble navigation_launch.py 链路: controller /cmd_vel → remap /cmd_vel_nav
-#   → velocity_smoother → /cmd_vel → odom_bridge → /cmd_vel_limiter → RL
-# 默认参数 deadband_velocity=[0.1,0.1,0.2] 会把 MPPI 的低速指令 (|vx|<0.1
-# 或 |wz|<0.2) 直接清零 —— 2026-07-14 CI 中机器人 16s 只前进 0.23m 的元凶。
-# 此处 deadband 归零 + 限速与 MPPI/odom_bridge 对齐。
-velocity_smoother:
-  ros__parameters:
-    use_sim_time: True
-    smoothing_frequency: 20.0
-    scale_velocities: False
-    feedback: "OPEN_LOOP"
-    max_velocity: [0.45, 0.0, 0.45]
-    min_velocity: [0.0, 0.0, -0.45]
-    max_accel: [1.0, 0.0, 1.0]
-    max_decel: [-1.0, 0.0, -1.0]
-    odom_topic: "odom"
-    odom_duration: 0.1
-    deadband_velocity: [0.0, 0.0, 0.0]
-    velocity_timeout: 1.0
-
-# --- Lifecycle Manager (缩短 bond 超时，加速 Ctrl+C 关闭) ---
-lifecycle_manager_navigation:
-  ros__parameters:
-    use_sim_time: True
-    autostart: True
-    bond_timeout: 2.0        # 默认 4.0s，缩短为 2s，避免 Ctrl+C 卡住
-
-lifecycle_manager_localization:
-  ros__parameters:
-    use_sim_time: True
-    autostart: True
-    bond_timeout: 2.0
