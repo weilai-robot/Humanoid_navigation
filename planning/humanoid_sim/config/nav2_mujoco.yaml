@@ -217,7 +217,7 @@ local_costmap:
         # cloud_clear: 仅清除，从 0.8m 起（机器人贴近障碍时不清除体素，防止"遗忘"）
         observation_sources: cloud_mark cloud_clear
         cloud_mark:
-          topic: /cloud_registered_body
+          topic: /cloud_registered_body_fresh
           data_type: "PointCloud2"
           # 观测时间戳容忍: FastLIO 点云 stamp=lidar_end_time (处理延迟+
           # RTF<1 积压), 与 TF 缓存窗口错位导致 "Message Filter dropping
@@ -233,7 +233,7 @@ local_costmap:
           obstacle_max_range: 7.0   # 5→7: 动态障碍更早进局部图 (提前绕行)
           obstacle_min_range: 0.3
         cloud_clear:
-          topic: /cloud_registered_body
+          topic: /cloud_registered_body_fresh
           data_type: "PointCloud2"
           transform_tolerance: 2.0
           max_obstacle_height: 0.2
@@ -292,7 +292,7 @@ global_costmap:
         combination_method: 1
         observation_sources: pointcloud
         pointcloud:
-          topic: /cloud_registered_body
+          topic: /cloud_registered_body_fresh
           data_type: "PointCloud2"
           transform_tolerance: 2.0     # 同 local cloud_mark — TF/点云时间戳错位容忍
           max_obstacle_height: 0.2

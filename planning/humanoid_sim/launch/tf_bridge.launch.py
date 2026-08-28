@@ -19,16 +19,19 @@ def generate_launch_description():
         # transform cache", transform_tolerance 等待对它无效) → costmap 对动态
         # 障碍半盲 (通道A线上 dyn_person/dyn_crate 不在静态地图, CI 每场景 1 碰撞)。
         # nav2 观测源已改订 fresh 话题 (见 nav2_mujoco.yaml)。
-        # [33132248275 实验结论] retimer 暂停用: 重盖时间戳引入点云-TF
-        # ~0.12m 错位, B 场景反而提前摔倒 (vmax 1.732)。回滚到 6ac2727
-        # 基线行为 (A/B 零碰撞零摔倒)。代码保留备查。
-        # Node(
-        #     package='humanoid_sim',
-        #     executable='cloud_retimer.py',
-        #     name='cloud_retimer',
-        #     output='screen',
-        #     parameters=[{'use_sim_time': True}]
-        # ),
+        # [4bac823 裁定后重启] signOK=1.0 排除反转执行 → 绕圈=MPPI 局部极小,
+        # 根因是观测丢弃 (FastLIO 输出间歇 0.86s → TF 缓存窗口跳跃 →
+        # 'earlier than all data in cache' 永久丢帧) → costmap 对动态障碍
+        # (dyn_person 挡通道A入口) 半盲。重盖时间戳是修丢帧的正解;
+        # 上次副作用摔倒发生在机动未软化时代 (vx 0.4/wz 0.35), 现已
+        # vx 0.32/wz 0.30 + CostCritic 6.0, 组合重新验证。
+        Node(
+            package='humanoid_sim',
+            executable='cloud_retimer.py',
+            name='cloud_retimer',
+            output='screen',
+            parameters=[{'use_sim_time': True}]
+        ),
 
 
         # ---- 1. odom_bridge: FastLIO2 Odometry -> odom->base_footprint TF ----
