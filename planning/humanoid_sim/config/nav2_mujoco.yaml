@@ -50,7 +50,7 @@ bt_navigator:
 controller_server:
   ros__parameters:
     use_sim_time: True
-    controller_frequency: 10.0
+    controller_frequency: 5.0    # 10→5Hz: RL 步态 cycle_time 0.7s, 10Hz 重规划在步态响应前就改指令 → 极限环绕圈 (33140410560: yawRT 0.78 旋转增益不足+恒定饱和 cmd)。5Hz 给步态留响应窗口
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -83,8 +83,8 @@ controller_server:
       rotate_to_heading_angular_vel: 0.3   # 低于 wz_max: 原地旋转更保守
       max_angular_accel: 0.8               # 2.0→0.8: 旋转加速度与人形步态匹配
       simulate_ahead_time: 1.0
-      time_steps: 32
-      model_dt: 0.1                   # 与 controller_frequency=10Hz 的控制周期(100ms)匹配，MPPI 要求 model_dt ≥ 控制周期
+      time_steps: 32            # ×model_dt 0.2 = 6.4s 视界, 覆盖 ~9 个步态周期
+      model_dt: 0.2                   # 0.1→0.2: 匹配步态 0.7s 响应时间的粗化模型 (MPPI 要求 model_dt ≥ 控制周期 0.2s@5Hz)
       batch_size: 600
       vx_std: 0.15
       vy_std: 0.0                     # 差速模型不需要 Y 方向采样
