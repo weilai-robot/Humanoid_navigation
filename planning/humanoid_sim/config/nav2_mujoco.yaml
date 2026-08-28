@@ -327,10 +327,40 @@ planner_server:
     use_sim_time: True
     planner_plugins: ["GridBased"]
     GridBased:
-      plugin: "nav2_navfn_planner/NavfnPlanner"
-      tolerance: 0.5
-      use_astar: True
+      # NavFn → SmacPlannerHybrid (46-run 实测定性后的规划侧修复):
+      # NavFn 最短路径在通道A入口产生 ~135° 尖角, 曲率需求超出步态能力
+      # (yawRT 0.70-0.78, 最小转弯半径 ~1.3-1.5m) → MPPI 在尖角处持续
+      # 饱和 → ~1m 极限环绕圈。Hybrid-A* 用 Dubin 运动模型 +
+      # minimum_turning_radius 显式约束, 输出步态运动学可行的平滑路径,
+      # MPPI 跟踪的曲率永不超界 (审核建议的"降低路径曲率需求"正解)。
+      plugin: "nav2_smac_planner/SmacPlannerHybrid"
+      tolerance: 0.25
+      downsample_costmap: false
+      downsampling_factor: 1
       allow_unknown: true
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 5.0
+      motion_model_for_search: "DUBIN"
+      angle_quantization_bins: 72
+      analytic_expansion_ratio: 3.5
+      analytic_expansion_max_length: 3.0
+      minimum_turning_radius: 1.4      # 实测步态曲率边界 (vx 0.32 / 有效 wz ~0.23)
+      reverse_penalty: 2.0
+      change_penalty: 0.0
+      non_straight_penalty: 1.2
+      cost_penalty: 2.0
+      retrospective_penalty: 0.0
+      lookup_table_size: 20.0
+      cache_obstacle_heuristic: false
+      smooth_path: true
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
+        do_refinement: true
+        refinement_num: 2
 
 # --- 行为服务器 (保守配置) ---
 # 注意: 当前 BT (behavior_trees/humanoid_navigate_w_replanning.xml) 不调用
