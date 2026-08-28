@@ -1,10 +1,10 @@
 /**:
     ros__parameters:
         feature_extract_enable: false
-        point_filter_num: 1
-        max_iteration: 20
-        filter_size_surf: 0.05
-        filter_size_map: 0.2
+        point_filter_num: 2
+        max_iteration: 5
+        filter_size_surf: 0.1
+        filter_size_map: 0.3
         cube_side_length: 30.0
         runtime_pos_log_enable: false
         map_file_path: "./test.pcd"
