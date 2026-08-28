@@ -28,6 +28,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import TransformStamped, Twist
 from tf2_ros import TransformBroadcaster
+import math
+
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -332,20 +334,41 @@ class OdomBridge(Node):
         # TODO 以后换成人形机器人可能要进行修改，重新计算雷达位置到base_footprint的速度映射
         # odom_msg.twist = msg.twist
 
-        # 速度：平滑滤波 (EMA 滤波，过滤高频抖动)
-        raw_tw = msg.twist.twist
-        self.filtered_twist_linear_x = self.alpha_v * raw_tw.linear.x + (1 - self.alpha_v) * self.filtered_twist_linear_x
-        self.filtered_twist_linear_y = self.alpha_v * raw_tw.linear.y + (1 - self.alpha_v) * self.filtered_twist_linear_y
-        self.filtered_twist_linear_z = self.alpha_v * raw_tw.linear.z + (1 - self.alpha_v) * self.filtered_twist_linear_z
-        self.filtered_twist_angular_x = self.alpha_v * raw_tw.angular.x + (1 - self.alpha_v) * self.filtered_twist_angular_x
-        self.filtered_twist_angular_y = self.alpha_v * raw_tw.angular.y + (1 - self.alpha_v) * self.filtered_twist_angular_y
-        self.filtered_twist_angular_z = self.alpha_v * raw_tw.angular.z + (1 - self.alpha_v) * self.filtered_twist_angular_z
+        # 速度：位姿差分计算 (替代 FastLIO twist 字段)
+        # 证据 (run 33134768172/33135721167): A 场景 86s 位移仅 0.44m (均速
+        # 0.005m/s) 而 GT 峰值 0.41、cmd 恒定 vx~0.325/wz~0.317 — 机器人在
+        # r=vx/wz≈1.0m 原地绕圈。MPPI 轨迹预测依赖 /odom twist; FastLIO 的
+        # twist 字段未经核实 (其 body 系速度估计在此配置下失真), 反馈错误时
+        # MPPI 闭环发散成绕圈。相邻 footprint 位姿差分 + yaw 差分得到的
+        # 速度与 TF 同源, 自洽且可验证。
+        now_ns = stamp.sec + stamp.nanosec * 1e-9
+        if getattr(self, '_last_pose', None) is not None:
+            dt = now_ns - self._last_pose_t
+            if dt > 1e-3:
+                dx_g = footprint_x - self._last_pose[0]
+                dy_g = footprint_y - self._last_pose[1]
+                dyaw = yaw - self._last_yaw
+                # 归一化到 (-pi, pi]
+                dyaw = (dyaw + math.pi) % (2 * math.pi) - math.pi
+                # 世界系位移旋回 body 系 (仅 yaw, footprint 已抹平 roll/pitch)
+                cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+                vx_b = cos_y * dx_g + sin_y * dy_g
+                vy_b = -sin_y * dx_g + cos_y * dy_g
+                raw_vx = vx_b / dt
+                raw_wz = dyaw / dt
+                # EMA 平滑 (alpha 0.2 同前)
+                self.filtered_twist_linear_x = self.alpha_v * raw_vx + (1 - self.alpha_v) * self.filtered_twist_linear_x
+                self.filtered_twist_linear_y = self.alpha_v * vy_b / dt + (1 - self.alpha_v) * self.filtered_twist_linear_y
+                self.filtered_twist_angular_z = self.alpha_v * raw_wz + (1 - self.alpha_v) * self.filtered_twist_angular_z
+        self._last_pose = (footprint_x, footprint_y)
+        self._last_pose_t = now_ns
+        self._last_yaw = yaw
 
         odom_msg.twist.twist.linear.x = self.filtered_twist_linear_x
         odom_msg.twist.twist.linear.y = self.filtered_twist_linear_y
-        odom_msg.twist.twist.linear.z = self.filtered_twist_linear_z
-        odom_msg.twist.twist.angular.x = self.filtered_twist_angular_x
-        odom_msg.twist.twist.angular.y = self.filtered_twist_angular_y
+        odom_msg.twist.twist.linear.z = 0.0
+        odom_msg.twist.twist.angular.x = 0.0
+        odom_msg.twist.twist.angular.y = 0.0
         odom_msg.twist.twist.angular.z = self.filtered_twist_angular_z
         odom_msg.twist.covariance = msg.twist.covariance
 
