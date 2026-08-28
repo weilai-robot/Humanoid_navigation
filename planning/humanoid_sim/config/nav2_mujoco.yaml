@@ -78,7 +78,7 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_mppi_controller::MPPIController"
-      angular_dist_threshold: 2.785  # 回滚 0.9 实验 (33142518306: 碰撞回归 6 次 vs 基线零, A/B 绕圈依旧) — 最终钉在 89434c4 基线配置 (双零摔倒/碰撞)。步态曲率边界的正解在 motion_control 侧 (见 doc 终局裁定)
+      angular_dist_threshold: 0.9   # 重启 0.9 (~52°): 与 vx 0.15 组合 — 大航向差原地转对齐 (无曲率), 小偏差 MPPI 低速缓转 (R 0.64m)。0.9 版上次的碰撞回归发生在 vx 0.32 时代, 低速下绕障裕度大增
       forward_sampling_distance: 1.5   # 0.5 → 1.5：目标在身后时路径弯曲，0.5m采样点角度不稳定，扩大采样距离使 Shim 触发更可靠
       rotate_to_heading_angular_vel: 0.3   # 低于 wz_max: 原地旋转更保守
       max_angular_accel: 0.8               # 2.0→0.8: 旋转加速度与人形步态匹配
@@ -89,7 +89,7 @@ controller_server:
       vx_std: 0.15
       vy_std: 0.0                     # 差速模型不需要 Y 方向采样
       wz_std: 0.25              # 0.30→0.25: 再降旋转采样方差 — 急转机动是摔倒主因 (D 场景 vmax 1.0+, 物理崩坏)
-      vx_max: 0.32                    # 0.4→0.32: 机动降速 — 避障急转时低动能, 步态稳定裕度更大 (33059189624/33132248275: 摔倒均发生在机动段)
+      vx_max: 0.15                    # 0.32→0.15: 通道可行性核心修复 — 48-run 定理: A/B 绕圈=步态最小转弯半径 R=vx/wz_eff(0.234)≈1.37m 超出通道半宽 0.5m。vx 0.15 → R≈0.64m < 0.5m? 仍略超,但配 wz_std/rotate_vel 0.3 原地转对齐后通道内可直线穿越 (无需转弯)。低速穿越是唯一导航侧解
       vx_min: 0.0                     # 人形后退不稳, 禁止倒车采样
       vy_max: 0.0
       wz_max: 0.30                    # 0.35→0.30: 摔倒链遏制 — 持续 |wz|≥0.35 机动下人形步态失稳
