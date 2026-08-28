@@ -162,7 +162,7 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 6.0            # 3.5→6.0: 避障主导权 — A/B 绕障途中碰撞+超时, 绕行优先于推进
+        cost_weight: 6.0          # 回滚 7.5 实验 (REJECTED 全场景爆发; 减少变量, 保留定点绕行 waypoints)            # 3.5→6.0: 避障主导权 — A/B 绕障途中碰撞+超时, 绕行优先于推进
         critical_cost: 300.0
         collision_cost: 1000000.0
         consider_footprint: false
@@ -334,7 +334,8 @@ planner_server:
       # + MPPI 缓行转向承担; 入口急转点的步态曲率边界问题留档 doc 后记,
       # 正解需步态侧转向能力 (motion_control, 本轮禁区)。
       plugin: "nav2_navfn_planner/NavfnPlanner"
-      tolerance: 0.5
+      tolerance: 0.75             # 0.5→0.75: goal 附近被膨胀/体素污染时仍可提取路径
+                                  # (NavFn 'legal potential was found' 提取失败 bug 缓解)
       use_astar: True
       allow_unknown: true
 
