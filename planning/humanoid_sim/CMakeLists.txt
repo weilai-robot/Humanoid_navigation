@@ -14,6 +14,7 @@ find_package(ament_cmake REQUIRED)
 # 安装 Python 脚本为可执行节点
 install(PROGRAMS
   scripts/odom_bridge.py
+  scripts/cloud_retimer.py
   scripts/mujoco_lidar_bridge.py
   scripts/livox_imu_throttle.py
   scripts/leg_odom_node.py

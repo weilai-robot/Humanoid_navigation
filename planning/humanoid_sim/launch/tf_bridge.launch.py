@@ -13,6 +13,20 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
+        # ---- 1b. cloud_retimer: 重盖 FastLIO 点云时间戳 → /cloud_registered_body_fresh ----
+        # FastLIO 点云 stamp=lidar_end_time; RTF<0.5 积压下早于 TF 缓冲区最旧条目,
+        # nav2 MessageFilter 永久丢弃观测 ("earlier than all the data in the
+        # transform cache", transform_tolerance 等待对它无效) → costmap 对动态
+        # 障碍半盲 (通道A线上 dyn_person/dyn_crate 不在静态地图, CI 每场景 1 碰撞)。
+        # nav2 观测源已改订 fresh 话题 (见 nav2_mujoco.yaml)。
+        Node(
+            package='humanoid_sim',
+            executable='cloud_retimer.py',
+            name='cloud_retimer',
+            output='screen',
+            parameters=[{'use_sim_time': True}]
+        ),
+
 
         # ---- 1. odom_bridge: FastLIO2 Odometry -> odom->base_footprint TF ----
         #        + cmd_vel relay: /cmd_vel -> /cmd_vel_limiter (加速度限幅)
