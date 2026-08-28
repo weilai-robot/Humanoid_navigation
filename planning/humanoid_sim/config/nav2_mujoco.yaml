@@ -162,7 +162,7 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 6.0          # 回滚 7.5 实验 (REJECTED 全场景爆发; 减少变量, 保留定点绕行 waypoints)            # 3.5→6.0: 避障主导权 — A/B 绕障途中碰撞+超时, 绕行优先于推进
+        cost_weight: 5.0          # 6.0→5.0: run 33158095118 实测 cmd_vx 冻结在 0.012 (CostCritic 高权在 vx 0.15 下把空间代价放大, 压倒前进收益) — 低速穿越需给前进让路; 避障由 waypoint 分段+定点绕行保证
         critical_cost: 300.0
         collision_cost: 1000000.0
         consider_footprint: false
