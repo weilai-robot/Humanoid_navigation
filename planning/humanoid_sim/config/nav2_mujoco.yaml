@@ -50,7 +50,7 @@ bt_navigator:
 controller_server:
   ros__parameters:
     use_sim_time: True
-    controller_frequency: 5.0    # 10→5Hz: RL 步态 cycle_time 0.7s, 10Hz 重规划在步态响应前就改指令 → 极限环绕圈 (33140410560: yawRT 0.78 旋转增益不足+恒定饱和 cmd)。5Hz 给步态留响应窗口
+    controller_frequency: 10.0   # 回滚 5Hz 实验 (33141447677 回归: B-F 启动即 FAILED_6)
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -78,13 +78,13 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_mppi_controller::MPPIController"
-      angular_dist_threshold: 2.785  # ~160°：仅目标几乎在正后方时触发原地旋转，其余转向交给 MPPI 走弧形，避免走廊提前拐弯
+      angular_dist_threshold: 0.9   # 2.785→0.9 (~52°): 终局裁定后修复 — 步态最小转弯半径 ~1.4m (yawRT 0.70-0.78 实测), 起步大航向差交给 Shim 原地旋转 (vx=0 纯转无曲率需求, rotate_vel 0.3 rad/s), MPPI 只处理 <52° 缓行转向, 从根上避开曲率边界处的持续饱和极限环
       forward_sampling_distance: 1.5   # 0.5 → 1.5：目标在身后时路径弯曲，0.5m采样点角度不稳定，扩大采样距离使 Shim 触发更可靠
       rotate_to_heading_angular_vel: 0.3   # 低于 wz_max: 原地旋转更保守
       max_angular_accel: 0.8               # 2.0→0.8: 旋转加速度与人形步态匹配
       simulate_ahead_time: 1.0
       time_steps: 32            # ×model_dt 0.2 = 6.4s 视界, 覆盖 ~9 个步态周期
-      model_dt: 0.2                   # 0.1→0.2: 匹配步态 0.7s 响应时间的粗化模型 (MPPI 要求 model_dt ≥ 控制周期 0.2s@5Hz)
+      model_dt: 0.1                   # 回滚 0.2 实验; 与 10Hz 控制周期匹配
       batch_size: 600
       vx_std: 0.15
       vy_std: 0.0                     # 差速模型不需要 Y 方向采样
