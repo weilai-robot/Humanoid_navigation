@@ -64,12 +64,12 @@ controller_server:
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
-      required_movement_radius: 0.10     # RL 低速时缓慢挪动也算有进度
-      movement_time_allowance: 30.0      # 20→30s: RL 跟踪带宽低, 起步/转向慢, 避免误判停滞
+      required_movement_radius: 0.15
+      movement_time_allowance: 20.0
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.20            # 严格验收: 测试判据 |err|≤0.25m, Nav2 停车须更紧
+      xy_goal_tolerance: 0.35
       yaw_goal_tolerance: 0.35
       stateful: True
 
@@ -78,22 +78,22 @@ controller_server:
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_mppi_controller::MPPIController"
-      angular_dist_threshold: 0.9   # 重启 0.9 (~52°): 与 vx 0.15 组合 — 大航向差原地转对齐 (无曲率), 小偏差 MPPI 低速缓转 (R 0.64m)。0.9 版上次的碰撞回归发生在 vx 0.32 时代, 低速下绕障裕度大增
+      angular_dist_threshold: 2.785  # hmj 对齐 (~160°): 仅目标几乎在正后方时原地旋转, 其余转向交给 MPPI 走弧形 — 健康链路下弧形转向比原地转更高效 (原 0.9 为病态 RTF 0.4 环境调参)
       forward_sampling_distance: 1.5   # 0.5 → 1.5：目标在身后时路径弯曲，0.5m采样点角度不稳定，扩大采样距离使 Shim 触发更可靠
-      rotate_to_heading_angular_vel: 0.3   # 低于 wz_max: 原地旋转更保守
-      max_angular_accel: 0.8               # 2.0→0.8: 旋转加速度与人形步态匹配
+      rotate_to_heading_angular_vel: 0.4   # hmj 对齐 (与 wz_max 一致)
+      max_angular_accel: 2.0
       simulate_ahead_time: 1.0
       time_steps: 32            # ×model_dt 0.2 = 6.4s 视界, 覆盖 ~9 个步态周期
       model_dt: 0.1                   # 回滚 0.2 实验; 与 10Hz 控制周期匹配
       batch_size: 600
       vx_std: 0.15
       vy_std: 0.0                     # 差速模型不需要 Y 方向采样
-      wz_std: 0.25              # 0.30→0.25: 再降旋转采样方差 — 急转机动是摔倒主因 (D 场景 vmax 1.0+, 物理崩坏)
-      vx_max: 0.15                    # 0.32→0.15: 通道可行性核心修复 — 48-run 定理: A/B 绕圈=步态最小转弯半径 R=vx/wz_eff(0.234)≈1.37m 超出通道半宽 0.5m。vx 0.15 → R≈0.64m < 0.5m? 仍略超,但配 wz_std/rotate_vel 0.3 原地转对齐后通道内可直线穿越 (无需转弯)。低速穿越是唯一导航侧解
-      vx_min: 0.0                     # 人形后退不稳, 禁止倒车采样
+      wz_std: 0.4               # hmj 对齐: 提供足够旋转采样空间以纠正朝向偏差
+      vx_max: 0.4                     # hmj 对齐: MuJoCo X1 安全步行速度上限
+      vx_min: -0.1
       vy_max: 0.0
-      wz_max: 0.30                    # 0.35→0.30: 摔倒链遏制 — 持续 |wz|≥0.35 机动下人形步态失稳
-      iteration_count: 2              # 1→2: 提高收敛质量, 减少起步阶段指令抖动(0/饱和交替)
+      wz_max: 0.4                     # hmj 对齐: 人形稳定上限
+      iteration_count: 1
       prune_distance: 0.8
       transform_tolerance: 0.5        # 增大(原0.1), 适配低RTF下TF延迟
       temperature: 0.3               # 降低探索随机性，提高路径跟随精度
@@ -146,11 +146,11 @@ controller_server:
         cost_power: 1
         offset_from_furthest: 4
         threshold_to_consider: 0.5
-        max_angle_to_furthest: 0.55 # ~32°: 更早缓转介入, 避免误差累积到 40° 后需要急转 (急转=摔倒风险)
+        max_angle_to_furthest: 0.7  # hmj 对齐 (~40°): 提前介入, 50°偏差即触发纠偏
         mode: 0                     # forward_preference：差速驱动前向优先
       PathFollowCritic:
         enabled: true
-        cost_weight: 8.0            # 5→8: 抗打转 — A 场景 86s 原地绕圈 (Failed to make progress), 加强沿路径推进引力
+        cost_weight: 5.0
         cost_power: 1
         offset_from_furthest: 5
         threshold_to_consider: 1.4
@@ -162,7 +162,7 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 5.0          # 6.0→5.0: run 33158095118 实测 cmd_vx 冻结在 0.012 (CostCritic 高权在 vx 0.15 下把空间代价放大, 压倒前进收益) — 低速穿越需给前进让路; 避障由 waypoint 分段+定点绕行保证
+        cost_weight: 3.5
         critical_cost: 300.0
         collision_cost: 1000000.0
         consider_footprint: false
@@ -225,7 +225,7 @@ local_costmap:
           # — 观测全丢 → 局部 costmap 对动态障碍失明 (CI 943ff27: 每场景
           # 1 次碰撞 + A 场景 86.7s 绕圈)。2s 等待窗口覆盖实测最大抖动
           # (Odometry hz min 0.05s max 0.86s)。
-          transform_tolerance: 2.0
+          transform_tolerance: 0.5
           max_obstacle_height: 0.2
           min_obstacle_height: -1.1
           clearing: False
@@ -235,7 +235,7 @@ local_costmap:
         cloud_clear:
           topic: /cloud_registered_body_fresh
           data_type: "PointCloud2"
-          transform_tolerance: 2.0
+          transform_tolerance: 0.5
           max_obstacle_height: 0.2
           min_obstacle_height: -1.1
           clearing: True
@@ -294,7 +294,7 @@ global_costmap:
         pointcloud:
           topic: /cloud_registered_body_fresh
           data_type: "PointCloud2"
-          transform_tolerance: 2.0     # 同 local cloud_mark — TF/点云时间戳错位容忍
+          transform_tolerance: 0.5     # hmj 对齐
           max_obstacle_height: 0.2
           min_obstacle_height: -1.0
           clearing: True
