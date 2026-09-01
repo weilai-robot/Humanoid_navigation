@@ -16,7 +16,7 @@
         filter_size_surf: 0.2
         filter_size_map: 0.3
         cube_side_length: 30.0
-        runtime_pos_log_enable: false
+        runtime_pos_log_enable: true
         # 仅建图保存路径；导航定位用 open3d_loc 的 path_map，勿与此混淆
         map_file_path: "./f1_x1_real_map.pcd"
 
