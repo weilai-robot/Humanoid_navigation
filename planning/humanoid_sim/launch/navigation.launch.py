@@ -12,7 +12,10 @@ def generate_launch_description():
     pkg_nav2 = get_package_share_directory('nav2_bringup')
 
     # 指向刚才保存的地图和新建的参数文件
-    map_file = os.path.join(pkg_humanoid, 'maps', 'mujoco_lab.yaml')  # f1_test1 school_room school_room2
+    # lab_env_map: main 自带 generate_map_from_xml.py 生成的完整世界图 (13/13 关键点位验证)
+    # mujoco_lab.pgm 为 FastLIO 单次实建图: 缺失 par_s1 墙段 (通道A被静态图视为 2.4m 宽)
+    # + 北墙大面积缺失 + 噪点岛屿 — 与仿真世界不一致, 不可用于严格 CI 判定
+    map_file = os.path.join(pkg_humanoid, 'maps', 'lab_env_map.yaml')
     params_file = os.path.join(pkg_humanoid, 'config', 'nav2_mujoco.yaml')
     # 保守行为树: Recovery 仅 [清代价地图+等待], 无 Spin/BackUp
     # (默认 BT 的 spin 0.798 rad/s 曾致人形摔倒 → FastLIO 发散, 2026-07-14 CI 事故)

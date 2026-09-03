@@ -52,7 +52,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 2.0
+    failure_tolerance: 0.0
     odom_topic: /odom
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
@@ -178,7 +178,7 @@ local_costmap:
       width: 4
       height: 4
       resolution: 0.05
-      robot_radius: 0.25
+      robot_radius: 0.30
       transform_tolerance: 0.5   # 允许TF时间戳偏差，防止点云被丢弃
 
       plugins: ["voxel_layer", "denoise_layer", "inflation_layer"]
@@ -190,7 +190,7 @@ local_costmap:
         publish_voxel_map: True        # 调试时开启, RViz 中可看 3D 体素
         origin_z: -1.4                 # MuJoCo: lidar在odom Z=0, base_link≈-0.45m, 地面≈-1.25m
         z_resolution: 0.1
-        z_voxels: 25                   # 25层×0.1m=2.5m，覆盖[-1.4m, 1.1m]，传感器origin Z≈0.87m在界内
+        z_voxels: 16                   # nav2 voxel_grid 实现上限16层; 覆盖[-1.4,0.2]m
         max_obstacle_height: 0.2       # 0.2m ≈ 地面(-1.25m)+1.45m障碍物顶部
         min_obstacle_height: -1.1      # -1.0m ≈ 地面(-1.25m)+0.25m，跳过地面噪声
         mark_threshold: 2              # # 体素列中至少 2 个点才标记障碍（单个散射噪点不再触发）
@@ -207,7 +207,7 @@ local_costmap:
           min_obstacle_height: -1.1
           clearing: False
           marking: True
-          obstacle_max_range: 5.0
+          obstacle_max_range: 7.0
           obstacle_min_range: 0.3
         cloud_clear:
           topic: /cloud_registered_body_fresh
@@ -227,8 +227,8 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0      # 10.0 → 4.0：降低梯度陡峭度，防止MPPI在狭窄通道产生高频振荡wz指令导致摔倒
-        inflation_radius: 0.7         # 0.6 → 0.7：增大膨胀半径，使机器人远离高障碍物盲区边缘
+        cost_scaling_factor: 3.5      # 降低梯度陡峭度，防MPPI窄通道高频振荡
+        inflation_radius: 0.55        # 通道A物理宽1.0m (0.30半径+0.55膨胀, lethal后余0.4m)
 
 # ==================== 全局代价地图 ====================
 global_costmap:
@@ -239,12 +239,12 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: True
-      robot_radius: 0.25
+      robot_radius: 0.30
       resolution: 0.05
       track_unknown_space: false
       transform_tolerance: 0.5   # 允许TF时间戳偏差，防止点云被丢弃
 
-      plugins: ["static_layer", "voxel_layer", "denoise_layer", "inflation_layer"]
+      plugins: ["voxel_layer", "denoise_layer", "inflation_layer"]
 
       # 静态地图层 (mujoco.yaml: FAST_LIO2 建图后用 octomap/pcd2pgm 转换)
       static_layer:
@@ -258,7 +258,7 @@ global_costmap:
         publish_voxel_map: False
         origin_z: -1.4
         z_resolution: 0.1
-        z_voxels: 25
+        z_voxels: 16
         max_obstacle_height: 0.2
         min_obstacle_height: -1.0
         mark_threshold: 3          # 2→3：提高噪点过滤门槛，减少全局代价地图噪点
@@ -286,7 +286,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.7        # 0.55 → 0.65：缩小与局部地图(0.7)的差距，减少全局/局部规划分裂，同时保留局部安全边际
+        inflation_radius: 0.55        # 与局部一致, 消除全局/局部可行域分裂
 
 # --- 地图服务器 ---
 map_server:
@@ -301,7 +301,7 @@ planner_server:
     planner_plugins: ["GridBased"]
     GridBased:
       plugin: "nav2_navfn_planner/NavfnPlanner"
-      tolerance: 0.5
+      tolerance: 0.75
       use_astar: True
       allow_unknown: true
 
