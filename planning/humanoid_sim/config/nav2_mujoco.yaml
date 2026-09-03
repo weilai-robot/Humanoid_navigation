@@ -40,6 +40,9 @@ bt_navigator:
     odom_topic: /odom
     bt_loop_duration: 20
     default_server_timeout: 20
+    # 占位值 "default" 由 launch/navigation.launch.py 的 RewrittenYaml 改写为
+    # 安装目录下的绝对路径 (yaml 不支持包路径替换)
+    default_nav_to_pose_bt_xml: "default"
 
 # --- 控制器服务器 (MPPI) ---
 controller_server:
@@ -198,7 +201,7 @@ local_costmap:
         # cloud_clear: 仅清除，从 0.8m 起（机器人贴近障碍时不清除体素，防止"遗忘"）
         observation_sources: cloud_mark cloud_clear
         cloud_mark:
-          topic: /cloud_registered_body
+          topic: /cloud_registered_body_fresh
           data_type: "PointCloud2"
           max_obstacle_height: 0.2
           min_obstacle_height: -1.1
@@ -207,7 +210,7 @@ local_costmap:
           obstacle_max_range: 5.0
           obstacle_min_range: 0.3
         cloud_clear:
-          topic: /cloud_registered_body
+          topic: /cloud_registered_body_fresh
           data_type: "PointCloud2"
           max_obstacle_height: 0.2
           min_obstacle_height: -1.1
@@ -263,7 +266,7 @@ global_costmap:
         combination_method: 1
         observation_sources: pointcloud
         pointcloud:
-          topic: /cloud_registered_body
+          topic: /cloud_registered_body_fresh
           data_type: "PointCloud2"
           max_obstacle_height: 0.2
           min_obstacle_height: -1.0

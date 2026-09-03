@@ -13,6 +13,26 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
+        # ---- 1b. cloud_retimer: 重盖 FastLIO 点云时间戳 → /cloud_registered_body_fresh ----
+        # FastLIO 点云 stamp=lidar_end_time; RTF<0.5 积压下早于 TF 缓冲区最旧条目,
+        # nav2 MessageFilter 永久丢弃观测 ("earlier than all the data in the
+        # transform cache", transform_tolerance 等待对它无效) → costmap 对动态
+        # 障碍半盲 (通道A线上 dyn_person/dyn_crate 不在静态地图, CI 每场景 1 碰撞)。
+        # nav2 观测源已改订 fresh 话题 (见 nav2_mujoco.yaml)。
+        # [4bac823 裁定后重启] signOK=1.0 排除反转执行 → 绕圈=MPPI 局部极小,
+        # 根因是观测丢弃 (FastLIO 输出间歇 0.86s → TF 缓存窗口跳跃 →
+        # 'earlier than all data in cache' 永久丢帧) → costmap 对动态障碍
+        # (dyn_person 挡通道A入口) 半盲。重盖时间戳是修丢帧的正解;
+        # 上次副作用摔倒发生在机动未软化时代 (vx 0.4/wz 0.35), 现已
+        # vx 0.32/wz 0.30 + CostCritic 6.0, 组合重新验证。
+        Node(
+            package='humanoid_sim',
+            executable='cloud_retimer.py',
+            name='cloud_retimer',
+            output='screen',
+            parameters=[{'use_sim_time': True}]
+        ),
+
 
         # ---- 1. odom_bridge: FastLIO2 Odometry -> odom->base_footprint TF ----
         #        + cmd_vel relay: /cmd_vel -> /cmd_vel_limiter (加速度限幅)
@@ -32,9 +52,14 @@ def generate_launch_description():
                 'enable_cmd_vel_relay': True,
                 'cmd_vel_input_topic': '/cmd_vel',
                 'cmd_vel_output_topic': '/cmd_vel_limiter',
-                'max_ax': 1.5,    # m/s²  (MPPI ax_max=1.5)
+                'max_ax': 1.0,    # m/s²  (MPPI ax_max=1.0)
                 'max_ay': 0.5,    # m/s²  (侧步保守值，DiffDrive vy=0 不触发)
-                'max_az': 2.0,    # rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常)
+                'max_az': 1.0,    # rad/s² (MPPI az_max=1.0)
+                # 幅值硬限幅 —— 人形安全上限, 拦截任何旁路超速指令
+                # (behavior_server 默认 spin 0.798 rad/s 曾直接导致摔倒, 2026-07-14)
+                'max_vx_abs': 0.45,   # m/s
+                'max_vy_abs': 0.1,    # m/s
+                'max_wz_abs': 0.45,   # rad/s
             }]
         ),
 

@@ -39,18 +39,44 @@ def generate_launch_description():
     )
     map_file = LaunchConfiguration('map_file')
 
+    # 已删除 static odom->camera_init (原 camera_init2odom 节点):
+    # tf_bridge.launch.py 已发 map->camera_init (z=1.05), 本节点再加 odom->camera_init
+    # 会给 camera_init 造成双父 → tf2 "two or more unconnected trees" 撕裂
+    # (run 33036512784: local costmap 'Could not find a connection between
+    # odom and base_link' 间歇出现, 机器人 A-D 场景静止 E-F 才动)。
+    # map->odom 由 global_localization.cpp 动态发布 (ICP 对齐), cpp 只查
+    # base_link->imu_link, 不依赖 odom->camera_init, 删除安全。
+    #
+    # ── 33038266026 复盘: 删除是错的 ──
+    # map->odom 动态发布从未发生: open3d_loc 卡在 "Waiting for
+    # cloud_registered_1" — FastLIO 的 /cloud_registered publisher
+    # (laserMapping.cpp:931) 从未实际 publish (代码路径未触发)。
+    # 上一 run E/F 能走正是靠本静态桥把 odom 挂进 camera_init(map) 子树。
+    # 正确拓扑: camera_init→odom (parent=camera_init) — camera_init 唯一父
+    # = map (z=1.05, tf_bridge), odom 唯一父 = camera_init, 整树单根恒连通:
+    #   map→camera_init→body (FastLIO)
+    #        └→odom→base_footprint→base_link→{lidar_link, imu_link}
+    # 旧方向 (odom 为 parent) 才会造成 camera_init 双父撕裂。
     static_tf_camera_init2odom = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='camera_init2odom',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'odom', 'camera_init']
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'camera_init', 'odom']
     )
 
     static_tf_imulink2baselink = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='imulink2baselink',
-        arguments=['0', '0', '0', '0', '0', '0', '1', 'imu_link', 'base_link']
+        # 方向修正 (对齐 open3d_loc_x1_real.launch.py 的教训):
+        # parent=base_link, child=imu_link — 让 imu_link 挂在 base_link 下。
+        # 旧方向 (imu_link→base_link) 双重错误: base_link 争父 (tf_bridge 已发
+        # base_footprint→base_link, 双父被 TF 拒) + imu_link 成无父根从 map 不可
+        # 达 → lookupTransform("base_link","imu_link") 报 "imu_link does not
+        # exist" → map→odom 不发布 → 全局 costmap 无 robot pose → NavFn 无法
+        # 规划 (run 33034736667: failed to create plan, 机器人静止 0/6)。
+        # lookupTransform 支持沿 edge 反向遍历, base_link→imu_link 同样满足查询。
+        arguments=['0', '0', '0', '0', '0', '0', '1', 'base_link', 'imu_link']
     )
 
     static_tf_base_center = Node(
@@ -116,8 +142,8 @@ def generate_launch_description():
     return LaunchDescription([
         use_sim_time_arg,
         map_file_arg,
-        # static_tf_camera_init2odom,
-        # static_tf_imulink2baselink,
+        static_tf_camera_init2odom,
+        static_tf_imulink2baselink,
         static_tf_base_center,
         global_localization_node,
         # pointcloud_transformer_node
