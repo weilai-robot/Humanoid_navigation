@@ -6,7 +6,10 @@
         filter_size_surf: 0.1
         filter_size_map: 0.3
         cube_side_length: 30.0
-        runtime_pos_log_enable: false
+        # [run 33732870881] 打开运行时耗时统计: FastLIO 输出在链启动
+        # ~10s 后停止 (cloud_retimer 只收到 9 帧), 进程活着但无日志 —
+        # 心跳日志让停摆时刻可见 (对齐 main 2dadc51 D1 MOD-01 对真机配置的改动)
+        runtime_pos_log_enable: true
         map_file_path: "./test.pcd"
 
         common:
