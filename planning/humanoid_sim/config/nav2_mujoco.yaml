@@ -62,8 +62,8 @@ controller_server:
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.35
-      yaw_goal_tolerance: 0.35
+      xy_goal_tolerance: 0.15     # 0.35（0.15: 严格门禁要求终点误差≤0.20m
+      yaw_goal_tolerance: 0.25    # 0.35（0.25: 终点朝向更严
       stateful: True
 
     # ---- RotationShimController 包装 MPPI ----
@@ -187,7 +187,7 @@ local_costmap:
         publish_voxel_map: True        # 调试时开启, RViz 中可看 3D 体素
         origin_z: -1.4                 # MuJoCo: lidar在odom Z=0, base_link≈-0.45m, 地面≈-1.25m
         z_resolution: 0.1
-        z_voxels: 25                   # 25层×0.1m=2.5m，覆盖[-1.4m, 1.1m]，传感器origin Z≈0.87m在界内
+        z_voxels: 16                   # 25层×0.1m=2.5m，覆盖[-1.4m, 1.1m]，传感器origin Z≈0.87m在界内
         max_obstacle_height: 0.2       # 0.2m ≈ 地面(-1.25m)+1.45m障碍物顶部
         min_obstacle_height: -1.1      # -1.0m ≈ 地面(-1.25m)+0.25m，跳过地面噪声
         mark_threshold: 2              # # 体素列中至少 2 个点才标记障碍（单个散射噪点不再触发）
@@ -255,7 +255,7 @@ global_costmap:
         publish_voxel_map: False
         origin_z: -1.4
         z_resolution: 0.1
-        z_voxels: 25
+        z_voxels: 16  # 25／16: VoxelGrid 上限 16 层
         max_obstacle_height: 0.2
         min_obstacle_height: -1.0
         mark_threshold: 3          # 2→3：提高噪点过滤门槛，减少全局代价地图噪点
