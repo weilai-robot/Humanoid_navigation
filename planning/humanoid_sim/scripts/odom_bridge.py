@@ -39,12 +39,13 @@ class VelocityRateLimiter:
     防止 MPPI 轨迹切换或规划器重置时产生的速度跳变冲击 RL 策略导致摔倒。
 
     参数选择依据 (与 nav2_mujoco.yaml MPPI 配置对齐):
-      max_ax = 1.5 m/s²   — 匹配 MPPI ax_max=1.5，不干扰正常加速
+      max_ax = 1.0 m/s²   — 匹配 MPPI ax_max=1.0
       max_ay = 0.5 m/s²   — 人形侧步保守值 (当前 DiffDrive vy=0，不触发)
-      max_az = 2.0 rad/s² — 略大于 MPPI az_max=1.0，仅截断异常跳变
+      max_az = 0.8 rad/s² — 0→0.4rad/s 需 0.5s; 截断 MPPI bang-bang 角速抖振
+                        (run 33837842161: wz±0.4 饱和反转 → 角jerk 20-25 超标)
     """
 
-    def __init__(self, max_ax=1.5, max_ay=0.5, max_az=2.0):
+    def __init__(self, max_ax=1.0, max_ay=0.5, max_az=0.8):
         self.max_ax = max_ax
         self.max_ay = max_ay
         self.max_az = max_az
@@ -108,9 +109,9 @@ class OdomBridge(Node):
         self.declare_parameter('enable_cmd_vel_relay', True)
         self.declare_parameter('cmd_vel_input_topic', '/cmd_vel')
         self.declare_parameter('cmd_vel_output_topic', '/cmd_vel_limiter')
-        self.declare_parameter('max_ax', 1.5)    # m/s²，匹配 MPPI ax_max
+        self.declare_parameter('max_ax', 1.0)    # m/s²，匹配 MPPI ax_max=1.0
         self.declare_parameter('max_ay', 0.5)    # m/s²，侧步保守值
-        self.declare_parameter('max_az', 2.0)    # rad/s²，略大于 MPPI az_max
+        self.declare_parameter('max_az', 0.8)    # rad/s²，截断角速抖振
 
         self.body_to_footprint_z = self.get_parameter('body_to_footprint_z').value
         self.odom_frame = self.get_parameter('odom_frame').value

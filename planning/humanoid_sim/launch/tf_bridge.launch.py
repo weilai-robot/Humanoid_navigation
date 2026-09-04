@@ -32,9 +32,10 @@ def generate_launch_description():
                 'enable_cmd_vel_relay': True,
                 'cmd_vel_input_topic': '/cmd_vel',
                 'cmd_vel_output_topic': '/cmd_vel_limiter',
-                'max_ax': 1.5,    # m/s²  (MPPI ax_max=1.5)
+                'max_ax': 1.0,    # m/s²  (MPPI ax_max=1.0, 对齐)
                 'max_ay': 0.5,    # m/s²  (侧步保守值，DiffDrive vy=0 不触发)
-                'max_az': 2.0,    # rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常)
+                'max_az': 0.8,    # rad/s² (MPPI az_max=1.0, 此处更紧: 0→0.4rad/s 需0.5s,
+                                  #  截断 bang-bang 角速抖振 — run 33837842161 E 角jerk 25/wz±0.4饱和反转)
             }]
         ),
 
