@@ -81,7 +81,7 @@ controller_server:
       batch_size: 600
       vx_std: 0.15
       vy_std: 0.0                     # 差速模型不需要 Y 方向采样
-      wz_std: 0.4               # 提供足够旋转采样空间以纠正朝向偏差
+      wz_std: 0.3               # 0.4→0.3: 减小角速采样方差提供足够旋转采样空间以纠正朝向偏差
       vx_max: 0.4                     # MuJoCo X1 安全步行速度上限
       vx_min: -0.1
       vy_max: 0.0
@@ -89,7 +89,7 @@ controller_server:
       iteration_count: 1
       prune_distance: 0.8
       transform_tolerance: 0.5        # 增大(原0.1), 适配低RTF下TF延迟
-      temperature: 0.3               # 降低探索随机性，提高路径跟随精度
+      temperature: 0.2               # 0.3→0.2: 降采样噪声, 减低 10Hz wz 抖动 (angular jerk 20-25 超标)降低探索随机性，提高路径跟随精度
       gamma: 0.015
       motion_model: "DiffDrive"
 
@@ -224,8 +224,8 @@ local_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 4.0      # 10.0 → 4.0：降低梯度陡峭度，防止MPPI在狭窄通道产生高频振荡wz指令导致摔倒
-        inflation_radius: 0.7         # 0.6 → 0.7：增大膨胀半径，使机器人远离高障碍物盲区边缘
+        cost_scaling_factor: 6.0      # 4.0→6.0: 更陡梯度, 减少近墙过度规避：降低梯度陡峭度，防止MPPI在狭窄通道产生高频振荡wz指令导致摔倒
+        inflation_radius: 0.45        # 0.7→0.45: 0.7时东房杂物被过度膆胀, 导致实走路径 2.3-2.6x 最优(run 33835908271 B/C)→ 0.7：增大膨胀半径，使机器人远离高障碍物盲区边缘
 
 # ==================== 全局代价地图 ====================
 global_costmap:
@@ -282,8 +282,8 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.7        # 0.55 → 0.65：缩小与局部地图(0.7)的差距，减少全局/局部规划分裂，同时保留局部安全边际
+        cost_scaling_factor: 5.0      # 3.0→5.0
+        inflation_radius: 0.40        # 0.7→0.40: 全局路径走门中/直穿杂物间隙→ 0.65：缩小与局部地图(0.7)的差距，减少全局/局部规划分裂，同时保留局部安全边际
 
 # --- 地图服务器 ---
 map_server:
