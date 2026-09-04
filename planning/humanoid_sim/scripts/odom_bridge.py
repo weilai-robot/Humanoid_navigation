@@ -103,6 +103,7 @@ class OdomBridge(Node):
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('input_topic', '/Odometry')     # FastLIO2 的里程计话题
         self.declare_parameter('output_topic', '/odom')        # 输出的标准里程计话题
+        self.declare_parameter('mount_rpy', [0.0, 0.0, 0.0])   # 雷达/IMU 相对 base_link 的安装 RPY(度)，纠正 mount 朝向偏移；0=不修正
 
         # --- cmd_vel relay 参数 ---
         self.declare_parameter('enable_cmd_vel_relay', True)
@@ -117,6 +118,11 @@ class OdomBridge(Node):
         self.base_frame = self.get_parameter('base_frame').value
         input_topic = self.get_parameter('input_topic').value
         output_topic = self.get_parameter('output_topic').value
+
+        # mount 旋转：body(IMU) 相对 base 的安装 RPY；base = body ⊗ R_mount⁻¹
+        _mount_rpy = self.get_parameter('mount_rpy').value
+        self._R_mount_inv = Rotation.from_euler('xyz', _mount_rpy, degrees=True).inv()
+        self._mount_active = any(abs(float(a)) > 1e-6 for a in _mount_rpy)
 
         # TF 广播器
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -170,7 +176,8 @@ class OdomBridge(Node):
             f'  输入: {input_topic}\n'
             f'  输出TF: {self.odom_frame} -> {self.base_frame}\n'
             f'  输出话题: {output_topic}\n'
-            f'  Z偏移: {self.body_to_footprint_z}m'
+            f'  Z偏移: {self.body_to_footprint_z}m\n'
+            f'  mount_rpy: {_mount_rpy}(deg){" [ACTIVE]" if self._mount_active else " [identity]"}'
             + (
                 f'\n  cmd_vel relay: {cmd_vel_input} -> {cmd_vel_output}'
                 f' (max_ax={self._rate_limiter.max_ax},'
@@ -220,13 +227,12 @@ class OdomBridge(Node):
         pos = msg.pose.pose.position
         ori = msg.pose.pose.orientation
 
-        # 将 body->base_footprint 的偏移（在 body 局部坐标系下）转换到世界坐标系
-        # body 到 base_footprint 在 body 局部坐标系下 is (0, 0, -1.31)
-        # 需要用 body 的旋转矩阵将其旋转到世界坐标系
-        quat = [ori.x, ori.y, ori.z, ori.w]
-        rot = Rotation.from_quat(quat)
-        local_offset = np.array([0.0, 0.0, self.body_to_footprint_z])
-        world_offset = rot.apply(local_offset)
+        # body(IMU) 在 camera_init 下的旋转
+        body_rot = Rotation.from_quat([ori.x, ori.y, ori.z, ori.w])
+        # body→base 偏移：base 帧下 [0,0,z] 转到 body 帧 = R_mount⁻¹·[0,0,z]，再转世界
+        local_offset = self._R_mount_inv.apply(
+            np.array([0.0, 0.0, self.body_to_footprint_z]))
+        world_offset = body_rot.apply(local_offset)
 
         # base_footprint 在 odom 坐标系下的位置
         footprint_x = pos.x + world_offset[0]
@@ -242,9 +248,10 @@ class OdomBridge(Node):
         stamp = self.get_clock().now().to_msg()
 
         
-        # 强制 base_footprint 只保留 Yaw 角 (抹平 Pitch 和 Roll 以满足 Nav2 平面代价地图要求)
-        r = Rotation.from_quat([ori.x, ori.y, ori.z, ori.w])
-        euler = r.as_euler('xyz', degrees=False)
+        # body(IMU)→base 朝向：扣除 mount 旋转 (base = body ⊗ R_mount⁻¹)，再 flatten 到 yaw
+        # (Nav2 平面代价地图要求 base_footprint 只保留 Yaw)
+        base_rot = body_rot * self._R_mount_inv
+        euler = base_rot.as_euler('xyz', degrees=False)
         yaw = euler[2]
         flat_quat = Rotation.from_euler('xyz', [0, 0, yaw]).as_quat()
 
@@ -285,18 +292,21 @@ class OdomBridge(Node):
         odom_msg.pose.pose.orientation.w = flat_quat[3]
         odom_msg.pose.covariance = msg.pose.covariance  # 保留原始协方差
 
-        # 速度：直接转发 FastLIO2 的速度（body 系下的速度 ≈ base_footprint 系下的速度）
-        # TODO 以后换成人形机器人可能要进行修改，重新计算雷达位置到base_footprint的速度映射
-        # odom_msg.twist = msg.twist
-
-        # 速度：平滑滤波 (EMA 滤波，过滤高频抖动)
+        # 速度：FastLIO2 的 twist 在 body 系；转到 base 系 = R_mount⁻¹·twist_body，再 EMA
+        # (不转的话 mount 有 yaw 偏移时 MPPI 会拿到横向速度)
         raw_tw = msg.twist.twist
-        self.filtered_twist_linear_x = self.alpha_v * raw_tw.linear.x + (1 - self.alpha_v) * self.filtered_twist_linear_x
-        self.filtered_twist_linear_y = self.alpha_v * raw_tw.linear.y + (1 - self.alpha_v) * self.filtered_twist_linear_y
-        self.filtered_twist_linear_z = self.alpha_v * raw_tw.linear.z + (1 - self.alpha_v) * self.filtered_twist_linear_z
-        self.filtered_twist_angular_x = self.alpha_v * raw_tw.angular.x + (1 - self.alpha_v) * self.filtered_twist_angular_x
-        self.filtered_twist_angular_y = self.alpha_v * raw_tw.angular.y + (1 - self.alpha_v) * self.filtered_twist_angular_y
-        self.filtered_twist_angular_z = self.alpha_v * raw_tw.angular.z + (1 - self.alpha_v) * self.filtered_twist_angular_z
+        lin_base = self._R_mount_inv.apply(
+            np.array([raw_tw.linear.x, raw_tw.linear.y, raw_tw.linear.z]))
+        ang_base = self._R_mount_inv.apply(
+            np.array([raw_tw.angular.x, raw_tw.angular.y, raw_tw.angular.z]))
+
+        # EMA 平滑滤波 (过滤高频抖动)
+        self.filtered_twist_linear_x = self.alpha_v * lin_base[0] + (1 - self.alpha_v) * self.filtered_twist_linear_x
+        self.filtered_twist_linear_y = self.alpha_v * lin_base[1] + (1 - self.alpha_v) * self.filtered_twist_linear_y
+        self.filtered_twist_linear_z = self.alpha_v * lin_base[2] + (1 - self.alpha_v) * self.filtered_twist_linear_z
+        self.filtered_twist_angular_x = self.alpha_v * ang_base[0] + (1 - self.alpha_v) * self.filtered_twist_angular_x
+        self.filtered_twist_angular_y = self.alpha_v * ang_base[1] + (1 - self.alpha_v) * self.filtered_twist_angular_y
+        self.filtered_twist_angular_z = self.alpha_v * ang_base[2] + (1 - self.alpha_v) * self.filtered_twist_angular_z
 
         odom_msg.twist.twist.linear.x = self.filtered_twist_linear_x
         odom_msg.twist.twist.linear.y = self.filtered_twist_linear_y
