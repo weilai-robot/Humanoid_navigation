@@ -282,8 +282,9 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0      # 3.0→5.0
-        inflation_radius: 0.40        # 0.7→0.40: 全局路径走门中/直穿杂物间隙→ 0.65：缩小与局部地图(0.7)的差距，减少全局/局部规划分裂，同时保留局部安全边际
+        cost_scaling_factor: 8.0      # 5.0→8.0: 低代价区更窄, 紧凑走廊通行代价下降
+        inflation_radius: 0.30        # 0.40→0.30: 玻璃开口南侧走廊(间隙0.26-0.35m)在0.40膨胀下代价过高,
+                                       # NavFn 偏选 2.4x 长北环(run 33842468439 C 效率0.42); 0.30 仍含 robot_radius 0.25
 
 # --- 地图服务器 ---
 map_server:
