@@ -54,8 +54,17 @@ class VelocityRateLimiter:
         self._last_wz = 0.0
         self._last_time = None  # None 表示首帧，直接透传不限幅
 
+    # 一阶惯性带宽 (1/s): 指数逼近目标速度, 时间常数 ~1/k。
+    # k=4 → 0→0.4m/s 约 0.7s 收敛; 对 10Hz MPPI 采样噪声 (>>k) 强衰减。
+    SMOOTHING_K = 4.0
+
     def limit(self, vx, vy, wz, now_sec):
-        """对 (vx, vy, wz) 施加加速度限幅，返回限幅后的值。
+        """一阶惯性平滑 + 加速度限幅。
+
+        先以指数速率 k 逼近目标 (平滑 MPPI 采样噪声), 再 clamp 到
+        加速度上限 (保护 RL 步态)。相比纯斜率限幅 (bang-bang 爬坡,
+        jerk 地板 ~5.6), 指数逼近的加速度自身单调衰减, jerk 有界
+        且平滑 (峰值 ≈ k²·Δv, 典型 <3)。
 
         Args:
             vx, vy, wz: 目标速度 (m/s, m/s, rad/s)
@@ -76,16 +85,15 @@ class VelocityRateLimiter:
             # 时间戳未前进（同一周期多帧或时钟抖动），用上一帧结果
             return self._last_vx, self._last_vy, self._last_wz
 
-        # 计算实际加速度并 clamp
-        ax = (vx - self._last_vx) / dt
-        ay = (vy - self._last_vy) / dt
-        az = (wz - self._last_wz) / dt
-
-        ax = max(-self.max_ax, min(self.max_ax, ax))
-        ay = max(-self.max_ay, min(self.max_ay, ay))
-        az = max(-self.max_az, min(self.max_az, az))
-
-        # 积分回速度
+        k = min(self.SMOOTHING_K * dt, 0.9)  # 离散稳定裕度
+        # 1) 一阶惯性逼近目标
+        des_vx = self._last_vx + (vx - self._last_vx) * k
+        des_vy = self._last_vy + (vy - self._last_vy) * k
+        des_wz = self._last_wz + (wz - self._last_wz) * k
+        # 2) 加速度上限 clamp (积分回速度)
+        ax = max(-self.max_ax, min(self.max_ax, (des_vx - self._last_vx) / dt))
+        ay = max(-self.max_ay, min(self.max_ay, (des_vy - self._last_vy) / dt))
+        az = max(-self.max_az, min(self.max_az, (des_wz - self._last_wz) / dt))
         self._last_vx += ax * dt
         self._last_vy += ay * dt
         self._last_wz += az * dt
