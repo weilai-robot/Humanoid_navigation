@@ -31,7 +31,7 @@ def generate_launch_description():
                 'base_frame': 'base_footprint',
                 'input_topic': '/Odometry',
                 'output_topic': '/odom',
-                'mount_rpy': [0.0, 0.0, 90.0],   # 雷达正面朝左 → mount yaw +90；odom_bridge 扣 R⁻¹=Rz(-90) 让 base+X 朝前。sign 验：RViz 箭头朝后/右就翻成 -90
+                'mount_rpy': [0.0, 0.0, -90.0],   # 雷达正面朝左 → mount yaw -90；odom_bridge 扣 R⁻¹=Rz(+90) 让 base+X=cam+Y=前。2026-09-04 RViz 实测 +90 朝后、-90 朝前
                 # 显式写死：AimRT x1_cfg 只订 /cmd_vel_limiter，不可靠默认值
                 'enable_cmd_vel_relay': True,
                 'cmd_vel_input_topic': '/cmd_vel',
