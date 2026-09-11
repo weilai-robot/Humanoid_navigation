@@ -11,8 +11,8 @@
         # 平台: 真机 Mini PC / Jetson + ROS2 Humble
         # ============================================================
         feature_extract_enable: false
-        point_filter_num: 1
-        max_iteration: 5
+        point_filter_num: 3
+        max_iteration: 3
         filter_size_surf: 0.2
         filter_size_map: 0.3
         cube_side_length: 30.0
@@ -31,7 +31,7 @@
             scan_line: 4
             scan_rate: 10               # 10Hz
             timestamp_unit: 3           # 3=ns，livox_ros_driver2 实机默认
-            blind: 0.3                  # Mid360 盲区 0.3m
+            blind: 0.9                  # Mid360 盲区 0.3m
 
         mapping:
             acc_cov: 0.1

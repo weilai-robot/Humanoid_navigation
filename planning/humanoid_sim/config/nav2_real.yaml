@@ -186,7 +186,7 @@ local_costmap:
         z_resolution: 0.1
         z_voxels: 25                   # [-1.4, 1.1]m
         max_obstacle_height: 0.2       # ≈ 地面(-1.25)+1.45
-        min_obstacle_height: -1.1      # ≈ 地面(-1.25)+0.15，跳过地面噪声
+        min_obstacle_height: -1.0      # ≈ 地面(-1.25)+0.15，跳过地面噪声
         mark_threshold: 2
         unknown_threshold: 15
         combination_method: 1
@@ -250,7 +250,7 @@ global_costmap:
         z_resolution: 0.1
         z_voxels: 25
         max_obstacle_height: 0.2
-        min_obstacle_height: -1.1
+        min_obstacle_height: -1.0
         mark_threshold: 3
         unknown_threshold: 15
         combination_method: 1
