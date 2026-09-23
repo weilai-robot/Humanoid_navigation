@@ -31,7 +31,7 @@
             scan_line: 4
             scan_rate: 10               # 10Hz
             timestamp_unit: 3           # 3=ns，livox_ros_driver2 实机默认
-            blind: 0.9                  # Mid360 盲区 0.3m
+            blind: 0.6                  # Mid360 盲区 0.3m
 
         mapping:
             acc_cov: 0.1
