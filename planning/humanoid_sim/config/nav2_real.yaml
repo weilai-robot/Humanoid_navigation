@@ -186,7 +186,7 @@ local_costmap:
         z_resolution: 0.1
         z_voxels: 25                   # [-1.4, 1.1]m
         max_obstacle_height: 0.2       # ≈ 地面(-1.25)+1.45
-        min_obstacle_height: -1.1      # ≈ 地面(-1.25)+0.15，跳过地面噪声
+        min_obstacle_height: -0.8      # ≈ 地面(-1.25)+0.15，跳过地面噪声
         mark_threshold: 2
         unknown_threshold: 15
         combination_method: 1
@@ -196,7 +196,7 @@ local_costmap:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
           max_obstacle_height: 0.2
-          min_obstacle_height: -1.1
+          min_obstacle_height: -0.8
           clearing: False
           marking: True
           obstacle_max_range: 5.0
@@ -205,11 +205,11 @@ local_costmap:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
           max_obstacle_height: 0.2
-          min_obstacle_height: -1.1
+          min_obstacle_height: -0.8
           clearing: True
           marking: False
           raytrace_max_range: 6.0
-          raytrace_min_range: 1.2
+          raytrace_min_range: 0.5
 
       denoise_layer:
         plugin: "nav2_costmap_2d::DenoiseLayer"
@@ -266,6 +266,25 @@ global_costmap:
           obstacle_min_range: 0.3
           raytrace_max_range: 10.0
           raytrace_min_range: 0.8
+        # observation_sources: cloud_mark_g cloud_clear_g
+        # cloud_mark_g:
+        #   topic: /cloud_registered_body
+        #   data_type: "PointCloud2"
+        #   max_obstacle_height: 0.2
+        #   min_obstacle_height: -1.0
+        #   clearing: False
+        #   marking: True
+        #   obstacle_max_range: 8.0
+        #   obstacle_min_range: 0.3
+        # cloud_clear_g:
+        #   topic: /cloud_registered_body
+        #   data_type: "PointCloud2"
+        #   max_obstacle_height: 0.2
+        #   min_obstacle_height: -1.0
+        #   clearing: True
+        #   marking: False
+        #   raytrace_max_range: 10.0
+        #   raytrace_min_range: 0.8
 
       denoise_layer:
         plugin: "nav2_costmap_2d::DenoiseLayer"
