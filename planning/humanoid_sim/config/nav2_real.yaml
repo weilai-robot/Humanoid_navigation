@@ -182,7 +182,7 @@ local_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
         publish_voxel_map: True
-        origin_z: -1.4
+        origin_z: -1.1
         z_resolution: 0.12
         z_voxels: 16                   # [-1.4, 1.1]m
         max_obstacle_height: 0.2       # ≈ 地面(-1.25)+1.45
@@ -246,7 +246,7 @@ global_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
         publish_voxel_map: False
-        origin_z: -1.4
+        origin_z: -1.2
         z_resolution: 0.12
         z_voxels: 16
         max_obstacle_height: 0.2
