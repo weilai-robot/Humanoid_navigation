@@ -12,8 +12,13 @@ find_package(ament_cmake REQUIRED)
 # find_package(<dependency> REQUIRED)
 
 # 安装 Python 脚本为可执行节点
+# nav_state_manager.py 必须在此列表：nav_state_manager.launch.py 用
+# Node(executable='nav_state_manager.py') 找它，Humble 只在
+# <prefix>/lib/humanoid_sim/ 下解析可执行文件，缺装=launch 直接
+# SubstitutionFailure（P0 审查 2026-10-16 发现的历史缺口）
 install(PROGRAMS
   scripts/odom_bridge.py
+  scripts/nav_state_manager.py
   scripts/mujoco_lidar_bridge.py
   scripts/livox_imu_throttle.py
   scripts/leg_odom_node.py

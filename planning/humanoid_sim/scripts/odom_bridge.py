@@ -194,10 +194,10 @@ class OdomBridge(Node):
           max_ax=1.5 m/s²  (MPPI ax_max=1.5)
           max_az=2.0 rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常跳变)
 
-        当输入突然归零（如 nav_state_manager 安全停止）时，
-        限幅器以 max_ax 的减速度平滑到零，约 0.33s (0.5→0 @1.5m/s²)。
-        但此时机器人已在 stand 模式（nav_state_manager 先发 stand_mode 再停 cmd_vel），
-        RL 步态已退出，故平滑归零不会引发失稳。
+        平滑归零只发生在零值消息仍持续流入时（正常到点收尾：MPPI 收尾递减，
+        限幅器跟帧平滑，约 0.33s @ 0.5→0 @1.5m/s²）。若输入沉默（上游
+        controller 崩溃），本中继是纯 pass-through、不合成零——最后一帧
+        被 AimRT 保持，这正是 nav_state_manager 看门狗存在的理由。
         """
         now_sec = self.get_clock().now().nanoseconds * 1e-9
         vx, vy, wz = self._rate_limiter.limit(
