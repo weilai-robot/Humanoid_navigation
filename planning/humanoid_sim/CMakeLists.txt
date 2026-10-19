@@ -27,8 +27,12 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# behavior_trees 必须在列表里：bt_navigator 的 default_nav_to_pose_bt_xml
+# 指向 share/humanoid_sim/behavior_trees/（P1 方案 C5；缺装=bt_navigator
+# 回默认树含 Spin，真机 rebuild 后 launch 起不来或静默回默认）
 install(DIRECTORY
   launch
+  behavior_trees
   urdf
   worlds
   config

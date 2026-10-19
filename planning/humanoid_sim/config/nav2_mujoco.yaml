@@ -40,6 +40,8 @@ bt_navigator:
     odom_topic: /odom
     bt_loop_duration: 20
     default_server_timeout: 20
+    # P1: 自定义 BT——与 nav2_real.yaml 同一份 xml（P1-堵路等待-BT改造方案.md C6'）
+    default_nav_to_pose_bt_xml: "$(find-pkg-share humanoid_sim)/behavior_trees/nav_no_spin_w_replanning.xml"
 
 # --- 控制器服务器 (MPPI) ---
 controller_server:
@@ -58,7 +60,7 @@ controller_server:
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
       required_movement_radius: 0.15
-      movement_time_allowance: 20.0
+      movement_time_allowance: 35.0  # P1: 20→35 堵路时给障碍更多清除等待时间（方案 C6' 镜像 C4）
 
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
