@@ -1,0 +1,69 @@
+/**:
+    ros__parameters:
+        # ============================================================
+        # FastLIO2 配置 — F1 / X1 【建图版 · 吊架倒装 native】
+        # 用途: 重建实验室地图；SOP: docs/sim2real/真机建图SOP-机器人吊架native-2026-10-26.md（附录 B1）
+        # 基底: F1_real_mid360.yaml（导航定位用，保持不动）；差异仅 4 处：
+        #   point_filter_num 3→1 / max_iteration 3→5   建图要密、迭代加深（当年 car_30 建图值）
+        #   map_file_path 相对→绝对                      坑2：相对路径落到启动 cwd
+        #   pcd_save_en false→true                       导航模式默认不存；建图开
+        # 雷达: Mid360 整机倒装（头部安装；吊架建图与站立导航均离地 ~1.2~1.25m）
+        # 外参: 与导航版一致——Livox 出厂 LiDAR→IMU 外参；倒装时二者同壳体一起旋转，
+        #   不照搬仿真的 Ry(180°)/diag(-1,1,-1)（那是 MuJoCo site 姿态拼装的特殊情况）
+        # pcd 落点策略（⚠ 两台机器别混）:
+        #   - WSL 离线重放（权威产物）: 本配置原样使用，落固定名
+        #     /home/hmj/humanoid_ws/maps/3D/robot_lab_mapping.pcd，
+        #     存完 mv 改名归档 <MAP>.pcd（防下次重放静默覆盖）
+        #   - 现场监控（副产品）: run_mapping_real.sh 启动时 sed patch 成
+        #     ~/bags/<MAP>_field.pcd（MiniPC 上没有 WSL 路径）
+        # 平台: MiniPC（现场监控）/ WSL（离线重放权威产物）· ROS2 Humble
+        # ============================================================
+        feature_extract_enable: false
+        point_filter_num: 1                 # 建图要密（导航版 3；当年 car_30 建图值）
+        max_iteration: 5                    # 建图加深（导航版 3）
+        filter_size_surf: 0.2
+        filter_size_map: 0.3
+        cube_side_length: 30.0
+        runtime_pos_log_enable: true
+        # 仅建图保存路径；导航定位用 open3d_loc 的 path_map，勿与此混淆
+        map_file_path: "/home/hmj/humanoid_ws/maps/3D/robot_lab_mapping.pcd"
+
+        common:
+            lid_topic:  "/livox/lidar"      # livox_ros_driver2 默认话题
+            imu_topic:  "/livox/imu"        # Mid360 内置 IMU（真机直接用，无需 throttle）
+            time_sync_en: false
+            time_offset_lidar_to_imu: 0.0
+
+        preprocess:
+            lidar_type: 1               # 1=Livox CustomMsg
+            scan_line: 4
+            scan_rate: 10               # 10Hz
+            timestamp_unit: 3           # 3=ns，livox_ros_driver2 实机默认
+            blind: 0.3                  # Mid360 盲区 0.3m
+
+        mapping:
+            acc_cov: 0.1
+            gyr_cov: 0.1
+            b_acc_cov: 0.0001
+            b_gyr_cov: 0.0001
+            fov_degree: 360.0
+            det_range: 10.0
+            # 出厂外参已知；行走中在线估计易漂，建图/导航默认关闭
+            extrinsic_est_en: false
+            # Livox Mid360 出厂 LiDAR→IMU 外参
+            extrinsic_T: [ -0.011, -0.02329, 0.04412 ]
+            extrinsic_R: [ 1.0, 0.0, 0.0,
+                           0.0, 1.0, 0.0,
+                           0.0, 0.0, 1.0 ]
+
+        publish:
+            path_en: true
+            effect_map_en: false
+            map_en: true
+            scan_publish_en: true
+            dense_publish_en: true
+            scan_bodyframe_pub_en: true
+
+        pcd_save:
+            pcd_save_en: true           # 建图存 PCD；导航模式默认不存
+            interval: -1
