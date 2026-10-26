@@ -174,7 +174,7 @@ local_costmap:
         min_obstacle_height: -0.29     # 地面(-0.39m)+0.10m，跳过地面噪声
         mark_threshold: 1              # 单点即可标记（高度过滤已替代噪声抑制）
         unknown_threshold: 15
-        combination_method: 1          # 1=overwrite, 每次更新直接覆盖而非累积
+        combination_method: 1          # 1=Max（只抬不降、单周期合并），非 overwrite——历史注释有误（Humble costmap_layer.cpp:124-132；0=Overwrite 会用层内 FREE 擦 static 墙，09-10 穿墙实测）
         observation_sources: pointcloud
         pointcloud:
           topic: /cloud_registered_body

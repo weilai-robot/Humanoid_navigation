@@ -9,7 +9,7 @@
 # 里程计: sim2sim_nav.py 发布 odom→base_link TF
 # 全局地图: mujoco.yaml (FAST_LIO2 建图后转换的 2D 栅格地图)
 # 坐标系说明: FAST_LIO2 初始化 lidar 在 Z=0,
-#   base_link(骨盆) ≈ -0.45m, 地面 ≈ -1.25m (odom系)
+#   base_link(骨盆) ≈ -0.45m, 地面 ≈ -1.15m (odom系)（§七补析勘误，旧注释-1.25有误）
 # 注意: ObstacleCritic 有 bug, 用 CostCritic 替代
 # ============================================================================
 
@@ -187,23 +187,23 @@ local_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
         publish_voxel_map: True        # 调试时开启, RViz 中可看 3D 体素
-        origin_z: -1.4                 # MuJoCo: lidar在odom Z=0, base_link≈-0.45m, 地面≈-1.25m
+        origin_z: -1.4                 # MuJoCo: lidar在odom Z=0, base_link≈-0.45m, 地面≈-1.15~-1.06(跨boot,出生沉降差)（§七补析勘误，旧注释-1.25有误）
         z_resolution: 0.1
-        z_voxels: 25                   # 25层×0.1m=2.5m，覆盖[-1.4m, 1.1m]，传感器origin Z≈0.87m在界内
-        max_obstacle_height: 0.2       # 0.2m ≈ 地面(-1.25m)+1.45m障碍物顶部
-        min_obstacle_height: -1.1      # -1.0m ≈ 地面(-1.25m)+0.25m，跳过地面噪声
-        mark_threshold: 2              # # 体素列中至少 2 个点才标记障碍（单个散射噪点不再触发）
+        z_voxels: 16                   # 16层×0.1m=1.6m覆盖[-1.4,+0.2]：VoxelGrid硬上限16层（voxel_grid.hpp:72，>16位运算越界，真机10-10教训）；标记带[-0.9,+0.2]界内、传感器odom z=0界内
+        max_obstacle_height: 0.2       # 0.2m(odom) ≈ 地面(-1.15m)+1.35m 障碍物顶部：局部带覆盖机器人全身相关高度
+        min_obstacle_height: -0.9      # P2盐渍修正(10-24)：odom地板跨boot实测-1.15~-1.06，坏boot(-1.06)下旧-1.1让地板入带4cm、grazing噪声2~3层可压穿threshold 2（用户RViz实测local也盐渍）——抬到-0.9=最坏地板噪声顶(~-0.96)之上，threshold 2(≥3层) 保留作第二道防线
+        mark_threshold: 2              # 数 z 层数且 off-by-one：2→需≥3层(0.3m垂直跨度)才 LETHAL——兼作地面噪声纵深防御（见 min_obstacle_height 注释）
         unknown_threshold: 15
-        combination_method: 1          # 1=overwrite, 每次更新直接覆盖而非累积
+        combination_method: 1          # 1=Max（只抬不降、单周期合并语义），非 overwrite——历史注释有误（Humble costmap_layer.cpp:124-132，10-13 已核）；local 无 static 层，1/0 输出等价
         # 标记和清除分离：防止盲区内 raytrace 清除已标记的近距离障碍体素
         # cloud_mark : 仅标记，从 0.3m 起（Mid360 物理盲区边界）
-        # cloud_clear: 仅清除，从 0.8m 起（机器人贴近障碍时不清除体素，防止"遗忘"）
+        # cloud_clear: 仅清除，从 1.2m 起（机器人贴近障碍时不清除体素，防止"遗忘"）
         observation_sources: cloud_mark cloud_clear
         cloud_mark:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
           max_obstacle_height: 0.2
-          min_obstacle_height: -1.1
+          min_obstacle_height: -0.9     # 与层级同步（P2盐渍修正：排地板噪声）
           clearing: False
           marking: True
           obstacle_max_range: 5.0
@@ -212,11 +212,11 @@ local_costmap:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
           max_obstacle_height: 0.2
-          min_obstacle_height: -1.1
+          min_obstacle_height: -1.4     # 不随 mark 抬、且取窗底：地板回波(-1.25~-0.9 跨boot+grazing展宽)全部入清除带——好boot(-1.15)主桶[−1.25,−1.1]若被-1.1切掉会失去大半清除射线（人走黑块不清回归）；地板只作射线终点不标记（clearing-only），无盐渍风险（拆标/清双源语义，镜像 global cloud_clear 含地板）
           clearing: True
           marking: False
           raytrace_max_range: 6.0
-          raytrace_min_range: 1.2     # 仅在 0.8m 以外执行清除，盲区内不清除
+          raytrace_min_range: 1.2     # 仅在 1.2m 以外执行清除，盲区内不清除
 
       denoise_layer:
         plugin: "nav2_costmap_2d::DenoiseLayer"
@@ -255,24 +255,31 @@ global_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
         publish_voxel_map: False
-        origin_z: -1.4
+        origin_z: -0.45                # P2修正：体素窗[−0.45,+1.15]盖住标记带[0.1,+0.9]+clear带[−0.45,+1.0]（map系，传感器≈+0.86~+1.06在窗内=体素13~15<16、表观地板-0.31~0.0在窗底，16层才够盖）
         z_resolution: 0.1
-        z_voxels: 25
-        max_obstacle_height: 0.2
-        min_obstacle_height: -1.0
-        mark_threshold: 3          # 2→3：提高噪点过滤门槛，减少全局代价地图噪点
+        z_voxels: 16                   # 16层×0.1m=1.6m覆盖[-0.45,+1.15]：VoxelGrid硬上限16层（>16无效，真机10-10教训）
+        max_obstacle_height: 0.9       # P2修正：+0.2→+0.9=离地~1.21>雷达1.15（复刻真机「带上缘>雷达」一致性，消d<0.5m近场盲区=贴墙假自由根因）
+        min_obstacle_height: 0.1       # P2盐渍修正(10-24实测)：pcd烙定地板≈-0.2(map系)而表观地板=烙定+ICP z误差E、实测E∈[-0.02,+0.20]（10-23 t_z 0.837/10-24 1.061，FPFH全局搜索不吃seed平移、逐boot抽签）→坏boot表观地板≈0.0，旧-0.2=地板整带入mark(threshold 0无纵深防线=盐渍)。+0.1容忍E≤+0.2(含两次实测)；E>+0.2残余风险由Phase 0门禁实测t_z把关；根治=锐利地板重建图另行立项
+        mark_threshold: 0          # 3→0（P2配套①）：mark_threshold 数 z 层数且 off-by-one（N→需≥N+1层才 LETHAL，10-13 源码终验），3=需 0.4m 垂直跨度——桌面/箱顶单层平面在任何 ≥1 阈值下都标不了（真机 global 同款 0）；地面由 min 带挡（0.1=最坏表观地板0.0+0.1余量）、孤立噪点由 denoise_layer 兜底
         unknown_threshold: 15
-        combination_method: 1
-        observation_sources: pointcloud
-        pointcloud:
+        combination_method: 1      # 1=Max（只抬不降、单周期合并），非 overwrite——保住 static 墙（09-10 穿墙实测=Overwrite(0) 用层内 FREE 擦 static；Humble costmap_layer.cpp:124-132，10-13 已核）
+        observation_sources: cloud_mark cloud_clear   # P2配套②：拆标/清双源（镜像真机 02d407e「宽带清+窄带标」）。ObservationBuffer 按源自己的 z 带过滤入队点云（observation_buffer.cpp:143-144）——单源抬 min 会把地面回波整批踢出清除引擎→「人走黑块不清」回归
+        cloud_mark:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 0.2
-          min_obstacle_height: -1.0
-          clearing: True
+          max_obstacle_height: 0.9     # 与体素层标记带同步（源级过滤覆盖层默认）
+          min_obstacle_height: 0.1     # 与层级同步（P2盐渍修正：表观地板最坏0.0+0.1余量）
+          clearing: False              # 仅标记
           marking: True
           obstacle_max_range: 8.0
-          obstacle_min_range: 0.3
+          obstacle_min_range: 0.3      # Mid360 物理盲区边界（与 local cloud_mark 同款）
+        cloud_clear:
+          topic: /cloud_registered_body
+          data_type: "PointCloud2"
+          max_obstacle_height: 1.0     # 盖过 mark 带上缘（窗顶 +1.15 内、端点体素 14<16）
+          min_obstacle_height: -0.45   # 含表观地板（-0.31~0.0 跨boot随ICP z漂移，始终在带内）：地面回波是清除射线主力
+          clearing: True               # 仅清除
+          marking: False
           raytrace_max_range: 10.0
           raytrace_min_range: 0.8      # 防止近距离射线清除墙体体素引发重规划恶性循环
 
@@ -285,7 +292,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
-        inflation_radius: 0.7        # 0.55 → 0.65：缩小与局部地图(0.7)的差距，减少全局/局部规划分裂，同时保留局部安全边际
+        inflation_radius: 0.7        # 0.55 → 0.7：与局部地图(0.7)对齐，减少全局/局部规划分裂
 
 # --- 地图服务器 ---
 map_server:
