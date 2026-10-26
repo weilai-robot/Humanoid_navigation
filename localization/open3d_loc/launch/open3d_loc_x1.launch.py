@@ -70,6 +70,13 @@ def generate_launch_description():
             config_file,
             {
                 'path_map': map_file,
+                # 【仿真专用覆盖】仿真地图为 identity 口径；真机图才是 roll-180 翻转
+                # （真机侧继续用 yaml 的 180，勿动此行方向）。本覆盖必须存在：
+                # 若沿用 yaml 的 180，upright gate 只放行 roll≈180 → ICP 被锁进镜像
+                # 分支（对称房间 fitness 假高）→ 导航必错。seed 0 下 FPFH 全局初始
+                # 化实测自动锁 identity 分支（fitness 0.976）。
+                # 证据：docs/nav/改进TODO/P4-种子180改0对照实验-2026-10-21.md
+                'initialpose': [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
                 'pcd_queue_maxsize': 10,
                 'voxelsize_coarse': 0.2,
                 'voxelsize_fine': 0.05,

@@ -12,8 +12,13 @@ find_package(ament_cmake REQUIRED)
 # find_package(<dependency> REQUIRED)
 
 # 安装 Python 脚本为可执行节点
+# nav_state_manager.py 必须在此列表：nav_state_manager.launch.py 用
+# Node(executable='nav_state_manager.py') 找它，Humble 只在
+# <prefix>/lib/humanoid_sim/ 下解析可执行文件，缺装=launch 直接
+# SubstitutionFailure（P0 审查 2026-10-16 发现的历史缺口）
 install(PROGRAMS
   scripts/odom_bridge.py
+  scripts/nav_state_manager.py
   scripts/mujoco_lidar_bridge.py
   scripts/livox_imu_throttle.py
   scripts/leg_odom_node.py
@@ -22,8 +27,12 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# behavior_trees 必须在列表里：bt_navigator 的 default_nav_to_pose_bt_xml
+# 指向 share/humanoid_sim/behavior_trees/（P1 方案 C5；缺装=bt_navigator
+# 回默认树含 Spin，真机 rebuild 后 launch 起不来或静默回默认）
 install(DIRECTORY
   launch
+  behavior_trees
   urdf
   worlds
   config
