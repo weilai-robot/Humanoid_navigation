@@ -1,5 +1,6 @@
 # ============================================================================
 # Nav2 参数 — X1 真机 (FastLIO2 + Open3D ICP + VoxelLayer + MPPI)
+# 2026-11-02 切换 robot_lab_20261030 倒装 native 图（旧 car30 回滚件见 docs/sim2real/地图切换备份-robot_lab_20261030/）
 # ============================================================================
 # 传感器: /cloud_registered_body (FastLIO2, PointCloud2, body 系)
 # TF 链 (真机):
@@ -9,7 +10,7 @@
 # 与仿真差异:
 #   - use_sim_time: False（真实时钟）
 #   - robot_base_frame: base_footprint（tf_bridge_real 只发到 footprint）
-#   - 地图: car30_real_fastlio.yaml（launch 也会传入；此处保持一致）
+#   - 地图: robot_lab_20261030.yaml（launch 也会传入；此处保持一致）
 # 注意: ObstacleCritic 有 bug, 用 CostCritic 替代
 # 安全: 导航结束须先 /stand_mode 再让 /cmd_vel 归零（nav_state_manager）
 # ============================================================================
@@ -161,8 +162,9 @@ controller_server:
         near_goal_distance: 0.5
 
 # ==================== 局部代价地图 ====================
-# VoxelLayer 高度相对 costmap global_frame(odom)：
-#   FastLIO body≈Z0 时，地面≈-1.25m（odom_bridge body_to_footprint_z）
+# VoxelLayer 高度相对 costmap global_frame(map)——robot_lab_20261030 倒装 native 图，z 朝下系：
+#   地面 z=+1.287（pcd 直方图实测 2026-10-31）；物理离地高度 hg → map z = 1.287 − hg，数值大 = 物理位置低
+#   （旧 car_30 正装图口径: 地面≈-1.25/-0.98、origin_z -1.1，见 docs/sim2real/地图切换备份-robot_lab_20261030/）
 local_costmap:
   local_costmap:
     ros__parameters:
@@ -184,11 +186,11 @@ local_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
         publish_voxel_map: True
-        origin_z: -1.1
+        origin_z: -0.19                # z 朝下系: 栅格底=物理最高处(离地1.48m)，= h-1.48, h=1.287(地面z, pcd实测)
         z_resolution: 0.1
-        z_voxels: 16                   # [-1.4, 1.1]m
-        max_obstacle_height: 0.35       # ≈ 地面(-1.25)+1.45
-        min_obstacle_height: -0.85      # ≈ 地面(-1.25)+0.15，跳过地面噪声
+        z_voxels: 16                   # 栅格 z [-0.19, +1.41]; z 朝下系: 数值大=物理位置低
+        max_obstacle_height: 1.16      # 对应物理低处: 离地0.13m 地面排除余量(=1.287-0.13)
+        min_obstacle_height: -0.04     # 对应物理高处: 离地1.33m(=1.287-1.33); ⚠ z朝下系 min=高 max=低
         mark_threshold: 1
         unknown_threshold: 15
         combination_method: 1
@@ -197,8 +199,8 @@ local_costmap:
         cloud_mark:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 0.35
-          min_obstacle_height: -0.85
+          max_obstacle_height: 1.16
+          min_obstacle_height: -0.04
           clearing: False
           marking: True
           obstacle_max_range: 5.0
@@ -206,8 +208,8 @@ local_costmap:
         cloud_clear:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 0.5
-          min_obstacle_height: -1.5
+          max_obstacle_height: 1.81
+          min_obstacle_height: -0.19
           clearing: True
           marking: False
           raytrace_max_range: 6.0
@@ -248,11 +250,11 @@ global_costmap:
         plugin: "nav2_costmap_2d::VoxelLayer"
         enabled: True
         publish_voxel_map: False
-        origin_z: -1.1
+        origin_z: -0.19
         z_resolution: 0.1
         z_voxels: 16
-        max_obstacle_height: 0.35
-        min_obstacle_height: -0.85
+        max_obstacle_height: 1.16
+        min_obstacle_height: -0.04
         mark_threshold: 0
         unknown_threshold: 15
         combination_method: 1
@@ -260,8 +262,8 @@ global_costmap:
         cloud_mark:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 0.35
-          min_obstacle_height: -0.85
+          max_obstacle_height: 1.16
+          min_obstacle_height: -0.04
           clearing: False
           marking: True
           obstacle_max_range: 8.0
@@ -269,8 +271,8 @@ global_costmap:
         cloud_clear:
           topic: /cloud_registered_body
           data_type: "PointCloud2"
-          max_obstacle_height: 0.5
-          min_obstacle_height: -1.5
+          max_obstacle_height: 1.81
+          min_obstacle_height: -0.19
           clearing: True
           marking: False
           raytrace_max_range: 10.0
@@ -292,7 +294,7 @@ map_server:
   ros__parameters:
     use_sim_time: False
     # navigation_real.launch.py 会传入 car30_real_fastlio.yaml；此处保持一致
-    yaml_filename: "car30_real_fastlio.yaml"
+    yaml_filename: "robot_lab_20261030.yaml"
 
 # --- 全局规划器 ---
 planner_server:

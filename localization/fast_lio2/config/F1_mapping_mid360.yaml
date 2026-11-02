@@ -4,7 +4,7 @@
         # FastLIO2 配置 — F1 / X1 【建图版 · 吊架倒装 native】
         # 用途: 重建实验室地图；SOP: docs/sim2real/真机建图SOP-机器人吊架native-2026-10-26.md（附录 B1）
         # 基底: F1_real_mid360.yaml（导航定位用，保持不动）；差异仅 4 处：
-        #   point_filter_num 3→1 / max_iteration 3→5   建图要密、迭代加深（当年 car_30 建图值）
+        #   max_iteration 3→5 / blind 1.0→2.5           2026-10-31 定版（pf3 已与导航版同值，去人实验结论入 SOP）
         #   map_file_path 相对→绝对                      坑2：相对路径落到启动 cwd
         #   pcd_save_en false→true                       导航模式默认不存；建图开
         # 雷达: Mid360 整机倒装（头部安装；吊架建图与站立导航均离地 ~1.2~1.25m）
@@ -19,7 +19,7 @@
         # 平台: MiniPC（现场监控）/ WSL（离线重放权威产物）· ROS2 Humble
         # ============================================================
         feature_extract_enable: false
-        point_filter_num: 1                 # 建图要密（导航版 3；当年 car_30 建图值）
+        point_filter_num: 3                 # 2026-10-31 定版（robot_lab_20261030 实验 v2）：1/3 降密压推行者残点，墙体不丢（绕圈远距补回）；与导航版同值
         max_iteration: 5                    # 建图加深（导航版 3）
         filter_size_surf: 0.2
         filter_size_map: 0.3
@@ -39,7 +39,7 @@
             scan_line: 4
             scan_rate: 10               # 10Hz
             timestamp_unit: 3           # 3=ns，livox_ros_driver2 实机默认
-            blind: 1.0                  # 原点球形屏蔽（x²+y²+z²>r²，非方向性）：吊架+悬垂腿+贴架走的推行者；现场 RViz 实测 r+0.2 重定
+            blind: 2.5                  # 2026-10-31 定版：源级球形屏蔽 r<2.5 杀推车人（吊装推行时人体近壳 <2.5m）；现场重定按 RViz 实测 r+0.2
 
         mapping:
             acc_cov: 0.1

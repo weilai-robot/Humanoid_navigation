@@ -2,7 +2,7 @@
 Open3D ICP 全局定位 — X1 【真机】
 默认:
   use_sim_time:=false
-  map_file:= open3d_loc/maps/car_30_real_map.pcd
+  map_file:= open3d_loc/maps/robot_lab_20261030.pcd   # 2026-11-02 切换（旧 car_30 原位保留可回滚）
 
 仿真请用: open3d_loc_x1.launch.py
 一键导航会 Include 本文件: humanoid_sim/navigation_real.launch.py
@@ -38,7 +38,7 @@ def generate_launch_description():
     default_map_path = PathJoinSubstitution([
         open3d_loc_share,
         'maps',
-        'car_30_real_map.pcd'
+        'robot_lab_20261030.pcd'
     ])
     map_file_arg = DeclareLaunchArgument(
         'map_file',

@@ -13,9 +13,10 @@ TF 链:
   map <-(ICP)-- camera_init <-(FastLIO2)-- body
   map <-(ICP)-- odom <-(odom_bridge)-- base_footprint
 
-地图 (真机 FastLIO 建图产物):
-  2D Nav2 地图: humanoid_sim/maps/car30_real_fastlio.yaml
-  3D ICP 地图:  open3d_loc/maps/car_30_real_map.pcd
+地图 (真机 FastLIO 建图产物, 2026-11-02 切换 robot_lab_20261030 倒装 native 图):
+  2D Nav2 地图: humanoid_sim/maps/robot_lab_20261030.yaml
+  3D ICP 地图:  open3d_loc/maps/robot_lab_20261030.pcd
+  (旧 car30 图文件仍在原位未删，回滚件另见 docs/sim2real/地图切换备份-robot_lab_20261030/)
 """
 
 import os
@@ -30,7 +31,7 @@ def generate_launch_description():
     pkg_nav2 = get_package_share_directory('nav2_bringup')
     pkg_open3d_loc = get_package_share_directory('open3d_loc')
 
-    map_file = os.path.join(pkg_humanoid, 'maps', 'car30_real_fastlio.yaml')
+    map_file = os.path.join(pkg_humanoid, 'maps', 'robot_lab_20261030.yaml')
     params_file = os.path.join(pkg_humanoid, 'config', 'nav2_real.yaml')
 
     # ====== 1. TF 桥接 (odom_bridge: /Odometry -> odom->base_footprint) ======
@@ -40,7 +41,7 @@ def generate_launch_description():
         )
     )
 
-    # ====== 2. ICP 全局定位 (真机专用 launch，默认 car_30_real_map.pcd) ======
+    # ====== 2. ICP 全局定位 (真机专用 launch，默认 robot_lab_20261030.pcd) ======
     open3d_loc_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(pkg_open3d_loc, 'launch', 'open3d_loc_x1_real.launch.py')
