@@ -31,7 +31,7 @@ def generate_launch_description():
                 'base_frame': 'base_footprint',
                 'input_topic': '/Odometry',
                 'output_topic': '/odom',
-                'mount_rpy': [0.0, 0.0, 90.0],   # 头部水平转 180°（front-left→front-right）→ mount yaw +90（sign 从 -90 翻 +90）。验：/odom 箭头朝前=对，朝后/侧就翻
+                'mount_rpy': [0.0, 0.0, -90.0],  # 2026-11-03 终审：Fixed Frame=base_footprint 点物理前方物体 x<0 ⇒ 朝向相对 10-14 有未记录变动（疑 10-30 吊架期头部转回 180°），[0,0,90]→[0,0,-90]；验法=base_footprint 系点击 ±x（屏幕箭头判据镜像不可辨，作废）；详见 docs/sim2real/真机倒装建图工作记录-robot_lab_20261030-2026-11-02.md
                 # 显式写死：AimRT x1_cfg 只订 /cmd_vel_limiter，不可靠默认值
                 'enable_cmd_vel_relay': True,
                 'cmd_vel_input_topic': '/cmd_vel',
