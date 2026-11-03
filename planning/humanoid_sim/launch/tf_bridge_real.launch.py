@@ -40,6 +40,14 @@ def generate_launch_description():
                 'max_ax': 1.0,
                 'max_ay': 0.5,
                 'max_az': 1.0,
+                # 2026-11-03 G2 兑现（11-02 起预注册）：native z-down 图 base_footprint 物理朝下，
+                # nav2 +angular.z=绕下向 z 轴 CCW=物理右转，底盘标准 +wz=左转 ⇒ 反号；不取负则
+                # yaw 闭环负增益 ⇒ 原地转圈（11-03 真机实测 ±90 mount 同样转圈，与「mount 只改
+                # 偏航不改 z 手性」的预判一致）。linear.y 同理取负，linear.x 不动（mount −90 后
+                # base x̂=机头）；仅命令路取负，/odom twist 反馈不取负（与 TF 同口径）。
+                # 旧图时代链内有 ICP 种子 roll=180 隐性翻手性，relay 直通即自洽——此参数为
+                # z-down 图专属，仿真/旧正装图链须保持 false。
+                'invert_cmd_vel_yz': True,
             }]
         ),
 

@@ -112,6 +112,12 @@ class OdomBridge(Node):
         self.declare_parameter('max_ax', 1.5)    # m/s²，匹配 MPPI ax_max
         self.declare_parameter('max_ay', 0.5)    # m/s²，侧步保守值
         self.declare_parameter('max_az', 2.0)    # rad/s²，略大于 MPPI az_max
+        # true: 转发时对 angular.z/linear.y 取负（linear.x 不动）。
+        # 适用 native 倒装图（map≡camera_init z-down）：base_footprint z 物理朝下，
+        # nav2 +wz = 绕下向 z 轴 CCW = 物理右转，与底盘标准约定（+wz=左转）反号；
+        # base ŷ = 物理右，底盘 +y = 左，同理。不取负则 yaw 闭环负增益 ⇒ 原地转圈。
+        # 注意：仅命令路取负；/odom twist 反馈走 R_mount⁻¹ 同一 z-down 口径，不取负。
+        self.declare_parameter('invert_cmd_vel_yz', False)
 
         self.body_to_footprint_z = self.get_parameter('body_to_footprint_z').value
         self.odom_frame = self.get_parameter('odom_frame').value
@@ -183,6 +189,8 @@ class OdomBridge(Node):
                 f' (max_ax={self._rate_limiter.max_ax},'
                 f' max_ay={self._rate_limiter.max_ay},'
                 f' max_az={self._rate_limiter.max_az})'
+                f' invert_yz={self.get_parameter("invert_cmd_vel_yz").value}'
+                f'{" [z-down 反号 ACTIVE]" if self.get_parameter("invert_cmd_vel_yz").value else ""}'
                 if self._enable_cmd_vel_relay else '\n  cmd_vel relay: DISABLED'
             )
         )
@@ -194,15 +202,23 @@ class OdomBridge(Node):
           max_ax=1.5 m/s²  (MPPI ax_max=1.5)
           max_az=2.0 rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常跳变)
 
+        invert_cmd_vel_yz（真机 z-down 图设 true，实时可改，便于现场 A/B）：
+          native 倒装图下 base_footprint z 物理朝下，nav2 的 +angular.z
+          （绕下向 z 轴 CCW）= 物理右转，底盘标准约定 +wz = 左转 → 需取负；
+          linear.y 同理（base ŷ=物理右、底盘 +y=左）；linear.x 不取负
+          （mount −90 修正后 base x̂ = 机头）。取负在限幅之前（入口处先换到
+          底盘约定，限幅器全程工作在底盘口径）。
+
         平滑归零只发生在零值消息仍持续流入时（正常到点收尾：MPPI 收尾递减，
         限幅器跟帧平滑，约 0.33s @ 0.5→0 @1.5m/s²）。若输入沉默（上游
         controller 崩溃），本中继是纯 pass-through、不合成零——最后一帧
         被 AimRT 保持，这正是 nav_state_manager 看门狗存在的理由。
         """
         now_sec = self.get_clock().now().nanoseconds * 1e-9
-        vx, vy, wz = self._rate_limiter.limit(
-            msg.linear.x, msg.linear.y, msg.angular.z, now_sec
-        )
+        vx_in, vy_in, wz_in = msg.linear.x, msg.linear.y, msg.angular.z
+        if self.get_parameter('invert_cmd_vel_yz').value:
+            vy_in, wz_in = -vy_in, -wz_in
+        vx, vy, wz = self._rate_limiter.limit(vx_in, vy_in, wz_in, now_sec)
 
         out = Twist()
         out.linear.x = vx
