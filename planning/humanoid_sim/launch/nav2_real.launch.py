@@ -37,7 +37,9 @@ def generate_launch_description():
     pkg_humanoid = get_package_share_directory('humanoid_sim')
     pkg_nav2 = get_package_share_directory('nav2_bringup')
 
-    map_file = os.path.join(pkg_humanoid, 'maps', 'car30_real_fastlio.yaml')
+    # 2026-11-03 补切：11-02 换图只改了 navigation_real.launch.py，此处漏改仍指 car30
+    # （真机现跑本 launch，手改承重后才补进仓；minipc 侧同一改动未提交，两头对齐）
+    map_file = os.path.join(pkg_humanoid, 'maps', 'robot_lab_20261030.yaml')
     params_file = os.path.join(pkg_humanoid, 'config', 'nav2_real.yaml')
 
     # 1. TF 桥接 (odom_bridge + 静态 TF + cmd_vel 限幅中继)
