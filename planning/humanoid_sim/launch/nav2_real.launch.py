@@ -17,13 +17,13 @@ TF + cmd_vel 限幅中继 + 静态 TF；nav2_bringup 负责控制/规划/代价�
 前置:
   1. livox + fastlio 已起
   2. ICP (open3d_loc_x1_real.launch.py) 已起且 map->odom TF 稳定
-     （run_nav_real_split.sh 的 [icp] 窗口，须先于此窗口起）
+     （run_nav_real.sh 的 [icp] 窗口，须先于此窗口起）
 
 cmd_vel 链路: Nav2 /cmd_vel -> odom_bridge /cmd_vel_limiter -> aimrt_main
   (odom_bridge 在本 launch 的 tf_bridge_real 里，与 nav2 同窗口，对齐仿真)
 
 注: 原文件 navigation_real.launch.py 未改动，仍可供 run_real_all.sh 合体一键启动。
-    分窗口（ICP/Nav2 各一终端看日志）用 run_nav_real_split.sh。
+    分窗口（ICP/Nav2 各一终端看日志）用 run_nav_real.sh（拆窗版 2026-11-06 已转正为主脚本）。
 """
 
 import os
