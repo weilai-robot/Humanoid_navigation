@@ -95,11 +95,6 @@ controller_server:
       gamma: 0.015
       motion_model: "DiffDrive"
 
-      # 加速度限制 — 人形机器人保守设置
-      ax_max: 1.0  #1.5
-      ax_min: -1.0
-      az_max: 1.0
-
       visualize: true
 
       # 评分标准 — 不用 ObstacleCritic(有bug), 用 CostCritic 替代
@@ -142,7 +137,6 @@ controller_server:
         offset_from_furthest: 4
         threshold_to_consider: 0.5
         max_angle_to_furthest: 0.7  # ~40°：提前介入，50°偏差即触发纠偏，防止斜角进入窄通道 0.7
-        mode: 0                     # forward_preference：差速驱动前向优先
       PathFollowCritic:
         enabled: true
         cost_weight: 5.0
