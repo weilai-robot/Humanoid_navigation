@@ -14,6 +14,8 @@ def generate_launch_description():
         DeclareLaunchArgument('stop_to_stand_s',   default_value='0.5'),
         DeclareLaunchArgument('stand_to_zero_s',   default_value='2.0'),
         DeclareLaunchArgument('cmd_vel_timeout_s', default_value='3.0'),
+        # P5 分级零速档兜底（须 > 门控总耐心 ≈43-56s，耦合 BT 外层(6)×内层(5)）
+        DeclareLaunchArgument('zero_silence_backstop_s', default_value='90.0'),
         DeclareLaunchArgument('no_cmd_vel_warn_s', default_value='6.0'),
 
         # float 参数包 ParameterValue：launch 传参全是字符串，手动写
@@ -34,6 +36,9 @@ def generate_launch_description():
                     LaunchConfiguration('stand_to_zero_s'), value_type=float),
                 'cmd_vel_timeout_s': ParameterValue(
                     LaunchConfiguration('cmd_vel_timeout_s'), value_type=float),
+                'zero_silence_backstop_s': ParameterValue(
+                    LaunchConfiguration('zero_silence_backstop_s'),
+                    value_type=float),
                 'no_cmd_vel_warn_s': ParameterValue(
                     LaunchConfiguration('no_cmd_vel_warn_s'), value_type=float),
             }],
