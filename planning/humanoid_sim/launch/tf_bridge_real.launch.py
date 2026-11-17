@@ -36,10 +36,18 @@ def generate_launch_description():
                 'enable_cmd_vel_relay': True,
                 'cmd_vel_input_topic': '/cmd_vel',
                 'cmd_vel_output_topic': '/cmd_vel_limiter',
-                # 与 nav2_real.yaml MPPI ax_max/az_max 对齐（真机更保守）
+                # 本限幅器是链路唯一加速度权威（nav2 侧加速度键已删）
                 'max_ax': 1.0,
                 'max_ay': 0.5,
                 'max_az': 1.0,
+                # P6a 非对称减速限幅（急停温柔化）。real 无含 /cmd_vel 的 bag，刹车需求
+                # 未验证 → 取比 sim(0.6) 更保守的 0.5 明示初值；用首个 real bag 复核（T1 挂账）
+                'max_decel': 0.5,
+                # wz 衰减夹板：0 = 沿用 max_az（行为不变）；收紧方向待证，勿擅改
+                'max_decel_wz': 0.0,
+                # P6b 死人开关：/cmd_vel 沉默期非零末目标强制归零超时（s）；两侧同值
+                # （nav2 20Hz 两侧同速率）
+                'cmd_silence_timeout_s': 0.5,
                 # 2026-11-03 G2 兑现（11-02 起预注册）：native z-down 图 base_footprint 物理朝下，
                 # nav2 +angular.z=绕下向 z 轴 CCW=物理右转，底盘标准 +wz=左转 ⇒ 反号；不取负则
                 # yaw 闭环负增益 ⇒ 原地转圈（11-03 真机实测 ±90 mount 同样转圈，与「mount 只改

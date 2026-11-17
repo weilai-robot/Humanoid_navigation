@@ -28,13 +28,21 @@ def generate_launch_description():
                 'base_frame': 'base_footprint',
                 'input_topic': '/Odometry',      # FastLIO2 发布的里程计话题
                 # cmd_vel 加速度限幅中继 (Nav2 /cmd_vel → aimrt_main /cmd_vel_limiter)
-                # 参数与 nav2_mujoco.yaml 中 MPPI ax_max/az_max 对齐
+                # 本限幅器是链路唯一加速度权威（nav2 MPPI 加速度死键已于 2026-11-08 删除）
                 'enable_cmd_vel_relay': True,
                 'cmd_vel_input_topic': '/cmd_vel',
                 'cmd_vel_output_topic': '/cmd_vel_limiter',
-                'max_ax': 1.5,    # m/s²  (MPPI ax_max=1.5)
-                'max_ay': 0.5,    # m/s²  (侧步保守值，DiffDrive vy=0 不触发)
-                'max_az': 2.0,    # rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常)
+                'max_ax': 1.5,    # m/s²  加速向上界（对称夹）
+                'max_ay': 0.5,    # m/s²  侧步保守值（DiffDrive vy=0 不触发）
+                'max_az': 2.0,    # rad/s² wz 加速向上界（仅截断异常）
+                # P6a 非对称减速限幅（急停温柔化）：sim 0.6 由 §3.2 v2 口径背书
+                # （干净巡航持续刹车需求 ≤0.46、深帧 0.28% 孤立单帧自愈）
+                'max_decel': 0.6,
+                # wz 衰减夹板：0 = 沿用 max_az（行为不变）；收紧方向待证，勿擅改
+                'max_decel_wz': 0.0,
+                # P6b 死人开关：/cmd_vel 沉默期非零末目标强制归零超时（s）
+                # 依据 §3.3：巡航帧间隙 p99=0.053s（9.4× 裕量）、观测 max 0.330s 且命令恒定天然容忍
+                'cmd_silence_timeout_s': 0.5,
             }]
         ),
 
