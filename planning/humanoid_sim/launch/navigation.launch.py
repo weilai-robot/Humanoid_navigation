@@ -44,11 +44,13 @@ def _setup(context, *args, **kwargs):
         }.items()
     )
 
-    return LaunchDescription([
+    # OpaqueFunction.function 必须返回 list(可迭代); 包 LaunchDescription 会
+    # 抛 "'LaunchDescription' object is not iterable" (Humble 实测)
+    return [
         tf_bridge_launch,
         # pc2scan_launch,
         nav2_launch
-    ])
+    ]
 
 
 def generate_launch_description():
