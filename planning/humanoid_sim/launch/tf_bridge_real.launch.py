@@ -3,12 +3,21 @@ TF 桥接 Launch 文件 — 实机版 (X1 + Mid360 倒装)
 启动内容：
   1. odom_bridge — FastLIO2 /Odometry → odom→base_footprint
                  + /cmd_vel → /cmd_vel_limiter（AimRT 只订 limiter）
-  2. 静态 TF（非精确标定，仅接通 TF 树，几何近似仿真）:
-       base_footprint → base_link (z≈0.65)
-       base_link → lidar_link (z≈0.66, Rx≈180° 倒装)
+  2. 静态 TF（非精确标定，仅接通 TF 树）:
+       base_footprint → base_link (z=-0.65)
+       base_link → lidar_link (z=-0.637, Rx≈180° 倒装)
   注意：
   - map→odom / map→camera_init 由 open3d_loc 动态发布，勿再发静态
   - use_sim_time: False
+
+z-down 口径（2026-11-24 离线 bag A/B 定值，真机三臂 /tmp/realbag_z_ab.py）：
+  native 倒装图 robot_lab_20261030 下 body z 轴物理朝下（bag zcomp≈+0.97~1.0 实证），
+  地面锚 map z=+1.287。btfz=+1.287 ⇒ odom→base_footprint z≈+1.29±0.03 落地锚成立
+  （旧值 −1.25 在新代码下 = footprint 悬在传感器上方 1.25m，z 为负）。
+  静态枝取负 = base_link 在 z-down footprint 系中比地面高 0.65（z 反向即上）；
+  lidar_link z=-0.637=1.287-0.65 由锚链推得（取代旧估计 +0.66），Rx180 保留
+  （S0 正值臂对账 map→base_link +1.94 / map→lidar +2.60，判死；S1 负值臂
+  bag 20261119 map→base_link +0.645 / map→lidar +0.011 ≈ 传感器本体高度，胜）。
 """
 
 from launch import LaunchDescription
@@ -26,7 +35,10 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'use_sim_time': False,
-                'body_to_footprint_z': -1.25,   # X1 LiDAR/IMU 到地面约 1.25m
+                # z-down 地面锚：body z 轴物理朝下（倒装），地图地面 z=+1.287。
+                # 旧值 -1.25 是 z-up 时代口径；新代码（cancel-hack 已删）下必须为正，
+                # 否则 footprint 落在传感器上方（bag A/B: deployed odom→fp z≈-1.2）
+                'body_to_footprint_z': 1.287,
                 'odom_frame': 'odom',
                 'base_frame': 'base_footprint',
                 'input_topic': '/Odometry',
@@ -61,21 +73,24 @@ def generate_launch_description():
 
         # ---- 静态 TF: base_footprint → base_link ----
         # 非精确标定，仅接通 TF 树（避免 base_link 孤儿）
+        # z=-0.65: z-down footprint 系中 base_link 在地面（z=0）之上 0.65
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='tf_base_footprint_to_base_link',
             parameters=[{'use_sim_time': False}],
-            arguments=['0', '0', '0.65', '0', '0', '0', 'base_footprint', 'base_link']
+            arguments=['0', '0', '-0.65', '0', '0', '0', 'base_footprint', 'base_link']
         ),
 
         # ---- 静态 TF: base_link → lidar_link ----
         # 非精确标定；qx=1 近似倒装 Mid360（与仿真 tf_bridge 一致）
+        # z=-0.637 = 地面锚 1.287 − 0.65（锚链推得，非实测标定；bag A/B S1 臂对账
+        # map→lidar z≈+0.01≈传感器本体高度成立）
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',
             name='tf_base_link_to_lidar_link',
             parameters=[{'use_sim_time': False}],
-            arguments=['0', '0', '0.66', '1', '0', '0', '0', 'base_link', 'lidar_link']
+            arguments=['0', '0', '-0.637', '1', '0', '0', '0', 'base_link', 'lidar_link']
         ),
     ])
