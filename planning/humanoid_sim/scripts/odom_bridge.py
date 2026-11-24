@@ -130,7 +130,11 @@ class OdomBridge(Node):
         super().__init__('odom_bridge')
 
         # --- 参数 ---
-        self.declare_parameter('body_to_footprint_z', -1.31)  # body 到 base_footprint 的 Z 偏移
+        # body→base_footprint 的 Z 偏移（z-down 地面锚语义：真机 +1.287 / 仿真 -1.15，
+        # 由 launch 权威给定）。此默认值 -1.31 是 z-up 时代占位残留，勿依赖——裸起节点
+        # （ros2 run 不带 params）会静默用错锚；launch 必须显式传参
+        # （tf_bridge.launch.py=-1.15 / tf_bridge_real.launch.py=+1.287）
+        self.declare_parameter('body_to_footprint_z', -1.31)
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('input_topic', '/Odometry')     # FastLIO2 的里程计话题
