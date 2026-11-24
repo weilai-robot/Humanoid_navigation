@@ -3,8 +3,14 @@ TF 桥接 Launch 文件
 启动内容：
   1. odom_bridge 节点 — 将 FastLIO2 的 /Odometry 转换为 odom->base_footprint TF
      + cmd_vel relay: /cmd_vel → /cmd_vel_limiter (加速度限幅)
-  2. 静态TF: map -> odom（初始为单位变换，后续 AMCL 接管）
-  3. 静态TF: map -> camera_init（FastLIO2/OctoMap 使用）
+  2. 静态TF: base_footprint -> base_link
+  3. 静态TF: base_link -> lidar_link
+
+注：map->odom / map->camera_init 由 open3d_loc 动态发布（每帧 fastlio odometry
+回调、ICP gate 之前即发），勿再发静态——真机 tf_bridge_real.launch.py 同口径。
+（2026-11-24 删除旧静态 map->camera_init z=1.05：它只在「tf_bridge 启动 →
+fastlio 首帧 odometry」的几秒窗口可见，同边 static+dynamic 实测 dynamic 有
+样本即 deterministic 完胜、零 flap，删后启动期链路由 open3d_loc 接管。）
 """
 
 from launch import LaunchDescription
@@ -23,7 +29,10 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'use_sim_time': True,
-                'body_to_footprint_z': -1.25,   # body(雷达/IMU处) 到 base_footprint(地面) 的Z偏移 (X1 LiDAR高度≈1.25m)
+                # 【2026-11-24 修正】−1.25→−1.15：sim boot 传感器高 1.15m
+                # （ICP map→camera_init 0.946~0.980 − 地面 −0.20 实测；1.25 是旧估计值。
+                #  真机 launch 保持各自取值，见 tf_bridge_real.launch.py）
+                'body_to_footprint_z': -1.15,
                 'odom_frame': 'odom',
                 'base_frame': 'base_footprint',
                 'input_topic': '/Odometry',      # FastLIO2 发布的里程计话题
@@ -58,20 +67,7 @@ def generate_launch_description():
         #     arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom']
         # ),
 
-        # ---- 3. 静态TF: map -> camera_init (FastLIO2 的世界坐标系) ----
-        # FastLIO2 和 OctoMap 使用 camera_init 作为全局参考系
-        # camera_init 在 X1 LiDAR 高度(1.25m)处初始化, 不在地面
-        # map z=0 对应 car 建图时 LiDAR 高度(0.20m), 故 camera_init 在 map 中 z = 1.25 - 0.20 = 1.05m
-        # 必须加上高度偏移, 否则 VoxelLayer 的传感器原点会在 Z=0 (地面), 导致 raytrace 失败
-        Node(
-            package='tf2_ros',
-            executable='static_transform_publisher',
-            name='tf_map_to_camera_init',
-            parameters=[{'use_sim_time': True}],
-            arguments=['0', '0', '1.05', '0', '0', '0', 'map', 'camera_init']
-        ),
-
-        # ---- 4. 静态TF: base_footprint -> base_link ----
+        # ---- 3. 静态TF: base_footprint -> base_link ----
         # MuJoCo navigation does not launch simulation.launch.py, so robot_state_publisher
         # is not running to publish the fixed joints from robot.xacro.
         Node(
@@ -82,7 +78,7 @@ def generate_launch_description():
             arguments=['0', '0', '0.65', '0', '0', '0', 'base_footprint', 'base_link']
         ),
 
-        # ---- 5. 静态TF: base_link -> lidar_link ----
+        # ---- 4. 静态TF: base_link -> lidar_link ----
         Node(
             package='tf2_ros',
             executable='static_transform_publisher',

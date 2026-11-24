@@ -13,9 +13,11 @@ TF + Odometry + cmd_vel 桥接节点：
     - 订阅 /cmd_vel (Nav2 MPPI 输出)，经 VelocityRateLimiter 限幅后发布 /cmd_vel_limiter
 
 TF 树最终结构：
-  map ──(static)──> odom ──(本节点)──> base_footprint ──(URDF)──> base_link ──> lidar_link / imu_link
-                     │
-  map ──(static)──> camera_init ──(FastLIO2)──> body   （FastLIO2 自身的分支，OctoMap 使用）
+  map ──(open3d_loc 动态)──> odom ≡ camera_init ──(FastLIO2)──> body
+                                │
+                                └─(本节点)──> base_footprint ──(URDF)──> base_link ──> lidar_link / imu_link
+  （map->odom / map->camera_init 由 open3d_loc 在每帧 fastlio odometry 回调、
+    ICP gate 之前动态发布；仿真/真机同口径，勿发静态，见 tf_bridge.launch.py）
 
 cmd_vel 链路：
   Nav2 /cmd_vel ──(VelocityRateLimiter)──> /cmd_vel_limiter ──> aimrt_main ControlModule
@@ -342,7 +344,7 @@ class OdomBridge(Node):
 
         转换逻辑：
         T(odom->base_footprint) = T(camera_init->body) * T(body->base_footprint)
-        其中 T(body->base_footprint) 是纯 Z 轴平移 (-1.31m)
+        其中 T(body->base_footprint) 是纯 Z 轴平移 (body_to_footprint_z)
         """
         # 提取 FastLIO2 的位姿（camera_init 坐标系下 body 的位置）
         pos = msg.pose.pose.position
@@ -358,10 +360,12 @@ class OdomBridge(Node):
         # base_footprint 在 odom 坐标系下的位置
         footprint_x = pos.x + world_offset[0]
         footprint_y = pos.y + world_offset[1]
-        # footprint_z = pos.z + world_offset[2]
-        # 直接加 body_to_footprint_z(-1.31) 会让脚底板去到 Z=-1.31（地下）
-        # 减去 body_to_footprint_z（即 +1.31）将 odom 系的初始平面拉回地面 Z=0
-        footprint_z = pos.z + world_offset[2] - self.body_to_footprint_z
+        # footprint_z = body_z + body→footprint 偏移（z-up 仿真为负值，即向下落回地面）。
+        # 【2026-11-24 修复 z 锚悬空】删掉旧 cancel-hack「- self.body_to_footprint_z」：
+        # 该项与 world_offset[2] 精确抵消，把 base_footprint 钉死在 body(传感器)高度，
+        # 悬空 ≈传感器离地高（sim 实测 1.09m）。2D 导航零 z 消费者故全程潜伏；
+        # 归因/验收见 docs/nav/排查/TF树z锚悬空-cancel-hack-2026-11-24.md
+        footprint_z = pos.z + world_offset[2]
 
         # 使用当前仿真时间而非 FastLIO2 消息时间作为 TF 时间戳
         # FastLIO2 处理+传输有 ~20-30ms 延迟，若用 msg.header.stamp 会导致 Nav2 控制器
