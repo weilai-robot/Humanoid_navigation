@@ -44,10 +44,20 @@ def _setup(context, *args, **kwargs):
         }.items()
     )
 
+    # ====== 4. 导航终态自动切 stand (真机同款 nav_state_manager) ======
+    # 到达/取消/失败任一终态 -> 延 0.5s 发 /stand_mode (5Hz x 2s);
+    # 只发 stand, 从不主动发 cmd_vel=0; 下次 send_nav_goal.sh 会自动切回 walk
+    state_mgr_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_humanoid, 'launch', 'nav_state_manager.launch.py')
+        )
+    )
+
     return LaunchDescription([
         tf_bridge_launch,
         # pc2scan_launch,
-        nav2_launch
+        nav2_launch,
+        state_mgr_launch
     ])
 
 
