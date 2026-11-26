@@ -13,13 +13,20 @@ TF + Odometry + cmd_vel 桥接节点：
     - 订阅 /cmd_vel (Nav2 MPPI 输出)，经 VelocityRateLimiter 限幅后发布 /cmd_vel_limiter
 
 TF 树最终结构：
-  map ──(static)──> odom ──(本节点)──> base_footprint ──(URDF)──> base_link ──> lidar_link / imu_link
-                     │
-  map ──(static)──> camera_init ──(FastLIO2)──> body   （FastLIO2 自身的分支，OctoMap 使用）
+  map ──(open3d_loc 动态)──> odom ≡ camera_init ──(FastLIO2)──> body
+                                │
+                                └─(本节点)──> base_footprint ──(URDF)──> base_link ──> lidar_link / imu_link
+  （map->odom / map->camera_init 由 open3d_loc 在每帧 fastlio odometry 回调、
+    ICP gate 之前动态发布；仿真/真机同口径，勿发静态，见 tf_bridge.launch.py）
 
 cmd_vel 链路：
   Nav2 /cmd_vel ──(VelocityRateLimiter)──> /cmd_vel_limiter ──> aimrt_main ControlModule
-  限幅参数与 MPPI 的 ax_max/az_max 对齐（见 nav2_mujoco.yaml），不干扰正常规划，仅截断异常跳变。
+  本限幅器是链路中唯一的加速度权威（nav2 侧 MPPI 加速度死键已于 2026-11-08 删除，
+  勿再按「与 MPPI 对齐」选参）：
+  - P6a 加速向对称夹 max_ax、减速向非对称夹 max_decel（双足急停温柔化，减速更慢）；
+  - P6b 输入沉默时由 20Hz 定时器接管：末目标≈0（取消/门控停的零帧收尾）走快车道
+    立即续刹到零；末目标≠0（上游崩溃形状）保沉默 T 秒后强制归零 ramp（死人开关）。
+    详见 _silence_timer_cb。
 """
 
 import rclpy
@@ -31,30 +38,46 @@ from tf2_ros import TransformBroadcaster
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+# ---- P6 沉默期接管常量（节点内部，不进 launch）----
+SILENCE_TIMER_PERIOD = 0.05   # 20Hz 巡检周期，与 nav2 指令帧率一致
+SILENCE_MARGIN = 0.1          # 沉默判定余量：> 帧周期 0.05 且 << T；帧流正常时回调负责，定时器不双积分
+SILENCE_DT_CAP = 0.1          # 定时器单步 dt 上限：sim /clock 前跳最多当 0.1s 用，防前跳虚假放大单步衰减（审核 F4）
+
 
 class VelocityRateLimiter:
-    """速度变化率限制器（加速度限幅）
+    """速度变化率限制器（P6a 非对称加速度限幅）
 
     将 Nav2 输出的速度指令平滑到 RL 步态可跟踪的加速度范围内，
-    防止 MPPI 轨迹切换或规划器重置时产生的速度跳变冲击 RL 策略导致摔倒。
+    防止速度跳变冲击 RL 策略导致摔倒。加速向与减速向非对称：
+    急停（减速向）比加速更温柔——7500 步行模型 settle-fall 族对急停敏感。
 
-    参数选择依据 (与 nav2_mujoco.yaml MPPI 配置对齐):
-      max_ax = 1.5 m/s²   — 匹配 MPPI ax_max=1.5，不干扰正常加速
-      max_ay = 0.5 m/s²   — 人形侧步保守值 (当前 DiffDrive vy=0，不触发)
-      max_az = 2.0 rad/s² — 略大于 MPPI az_max=1.0，仅截断异常跳变
+    参数选择依据（本限幅器是链路唯一加速度权威；sim 侧值见 tf_bridge.launch.py）：
+      max_ax       = 1.5 m/s²   — 加速向上界（对称夹）
+      max_ay       = 0.5 m/s²   — 侧步保守值 (当前 DiffDrive vy=0，不触发，双向对称)
+      max_az       = 2.0 rad/s² — wz 加速向上界（对称夹）
+      max_decel    = 0.6 m/s²   — 减速向下界（P6a 新增）；None/≤0 → =max_ax（旧对称行为）
+      max_decel_wz = 2.0 rad/s² — wz 衰减向下界（P6a 新增，默认=max_az 行为不变；
+                                  None/≤0 → =max_az。收紧前须先跑 wz 版刹车需求分布，
+                                  且收紧方向待证——减速更慢=转弯持续更久未必利好）
     """
 
-    def __init__(self, max_ax=1.5, max_ay=0.5, max_az=2.0):
+    def __init__(self, max_ax=1.5, max_ay=0.5, max_az=2.0,
+                 max_decel=None, max_decel_wz=None):
         self.max_ax = max_ax
         self.max_ay = max_ay
         self.max_az = max_az
+        # P6a：减速向夹板，缺省/非法值回落到对称（旧行为）
+        self.max_decel = max_decel if (max_decel and max_decel > 0) else max_ax
+        self.max_decel_wz = max_decel_wz if (max_decel_wz and max_decel_wz > 0) else max_az
         self._last_vx = 0.0
         self._last_vy = 0.0
         self._last_wz = 0.0
         self._last_time = None  # None 表示首帧，直接透传不限幅
+        # P6b：末目标记忆 = 沉默期收敛对象（每次收帧顺带记录；定时器据此走快车道/超时归零）
+        self._tgt = (0.0, 0.0, 0.0)
 
     def limit(self, vx, vy, wz, now_sec):
-        """对 (vx, vy, wz) 施加加速度限幅，返回限幅后的值。
+        """对 (vx, vy, wz) 施加加速度限幅，返回限幅后的值（帧流路径，回调调用）。
 
         Args:
             vx, vy, wz: 目标速度 (m/s, m/s, rad/s)
@@ -68,6 +91,7 @@ class VelocityRateLimiter:
             self._last_vy = vy
             self._last_wz = wz
             self._last_time = now_sec
+            self._tgt = (vx, vy, wz)
             return vx, vy, wz
 
         dt = now_sec - self._last_time
@@ -75,14 +99,22 @@ class VelocityRateLimiter:
             # 时间戳未前进（同一周期多帧或时钟抖动），用上一帧结果
             return self._last_vx, self._last_vy, self._last_wz
 
-        # 计算实际加速度并 clamp
-        ax = (vx - self._last_vx) / dt
-        ay = (vy - self._last_vy) / dt
-        az = (wz - self._last_wz) / dt
+        self._tgt = (vx, vy, wz)
+        return self._integrate(self._tgt, dt, now_sec)
 
-        ax = max(-self.max_ax, min(self.max_ax, ax))
+    def _integrate(self, tgt, dt, now_sec):
+        """向目标速度单步收敛（限幅器唯一积分点，帧流回调与沉默定时器共用）。
+
+        加速向夹 max_ax/max_ay/max_az，减速向夹 max_decel/max_ay/max_decel_wz。
+        积分后更新 _last_* 状态；调用方保证 0 < dt（limit 的守卫在本方法之外）。
+        """
+        ax = (tgt[0] - self._last_vx) / dt
+        ay = (tgt[1] - self._last_vy) / dt
+        az = (tgt[2] - self._last_wz) / dt
+
+        ax = max(-self.max_decel, min(self.max_ax, ax))          # P6a：减速向非对称
         ay = max(-self.max_ay, min(self.max_ay, ay))
-        az = max(-self.max_az, min(self.max_az, az))
+        az = max(-self.max_decel_wz, min(self.max_az, az))       # P6a：wz 衰减夹板（默认=max_az 行为不变）
 
         # 积分回速度
         self._last_vx += ax * dt
@@ -98,7 +130,11 @@ class OdomBridge(Node):
         super().__init__('odom_bridge')
 
         # --- 参数 ---
-        self.declare_parameter('body_to_footprint_z', -1.31)  # body 到 base_footprint 的 Z 偏移
+        # body→base_footprint 的 Z 偏移（z-down 地面锚语义：真机 +1.287 / 仿真 -1.15，
+        # 由 launch 权威给定）。此默认值 -1.31 是 z-up 时代占位残留，勿依赖——裸起节点
+        # （ros2 run 不带 params）会静默用错锚；launch 必须显式传参
+        # （tf_bridge.launch.py=-1.15 / tf_bridge_real.launch.py=+1.287）
+        self.declare_parameter('body_to_footprint_z', -1.31)
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_footprint')
         self.declare_parameter('input_topic', '/Odometry')     # FastLIO2 的里程计话题
@@ -109,9 +145,16 @@ class OdomBridge(Node):
         self.declare_parameter('enable_cmd_vel_relay', True)
         self.declare_parameter('cmd_vel_input_topic', '/cmd_vel')
         self.declare_parameter('cmd_vel_output_topic', '/cmd_vel_limiter')
-        self.declare_parameter('max_ax', 1.5)    # m/s²，匹配 MPPI ax_max
-        self.declare_parameter('max_ay', 0.5)    # m/s²，侧步保守值
-        self.declare_parameter('max_az', 2.0)    # rad/s²，略大于 MPPI az_max
+        self.declare_parameter('max_ax', 1.5)    # m/s²，加速向上界（对称夹）
+        self.declare_parameter('max_ay', 0.5)    # m/s²，侧步保守值（双向对称）
+        self.declare_parameter('max_az', 2.0)    # rad/s²，wz 加速向上界
+        # P6a：减速向非对称夹板（双足急停温柔化）。0 = 对称沿用 max_ax/max_az（旧行为）。
+        # sim 0.6 / real 0.5（real 无含 /cmd_vel 的 bag，取保守初值，复核挂 T1 清单）
+        self.declare_parameter('max_decel', 0.0)
+        self.declare_parameter('max_decel_wz', 0.0)   # rad/s²，wz 衰减夹板；0 = 对称沿用 max_az（行为不变）
+        # P6b：/cmd_vel 沉默期非零末目标强制归零的超时 T（秒）；两侧同值 0.5
+        # （nav2 20Hz 两侧同速率；巡航帧间隙 p99=0.053s，9.4× 裕量）
+        self.declare_parameter('cmd_silence_timeout_s', 0.5)
         # true: 转发时对 angular.z/linear.y 取负（linear.x 不动）。
         # 适用 native 倒装图（map≡camera_init z-down）：base_footprint z 物理朝下，
         # nav2 +wz = 绕下向 z 轴 CCW = 物理右转，与底盘标准约定（+wz=左转）反号；
@@ -171,11 +214,21 @@ class OdomBridge(Node):
             max_ax = self.get_parameter('max_ax').value
             max_ay = self.get_parameter('max_ay').value
             max_az = self.get_parameter('max_az').value
-            self._rate_limiter = VelocityRateLimiter(max_ax, max_ay, max_az)
+            self._rate_limiter = VelocityRateLimiter(
+                max_ax, max_ay, max_az,
+                max_decel=self.get_parameter('max_decel').value,
+                max_decel_wz=self.get_parameter('max_decel_wz').value)
+            self._cmd_silence_timeout = self.get_parameter('cmd_silence_timeout_s').value
+            # P6b 沉默期状态（rclpy.spin 单线程：定时器与订阅回调天然串行，无锁）
+            self._last_rx = None       # 最近一次 /cmd_vel 收帧时刻（秒，ROS clock）
+            self._zero_flushed = False # 沉默期归零完成后是否已补发零帧
+            self._last_published = None  # 最近一次发布 (vx, vy, wz)，定时器「值不变不发布」用
             self._cmd_vel_sub = self.create_subscription(
                 Twist, cmd_vel_input, self._cmd_vel_relay_cb, 10
             )
             self._cmd_vel_pub = self.create_publisher(Twist, cmd_vel_output, 10)
+            self._silence_timer = self.create_timer(
+                SILENCE_TIMER_PERIOD, self._silence_timer_cb)
 
         self.get_logger().info(
             f'OdomBridge 启动:\n'
@@ -188,7 +241,10 @@ class OdomBridge(Node):
                 f'\n  cmd_vel relay: {cmd_vel_input} -> {cmd_vel_output}'
                 f' (max_ax={self._rate_limiter.max_ax},'
                 f' max_ay={self._rate_limiter.max_ay},'
-                f' max_az={self._rate_limiter.max_az})'
+                f' max_az={self._rate_limiter.max_az},'
+                f' max_decel={self._rate_limiter.max_decel},'
+                f' max_decel_wz={self._rate_limiter.max_decel_wz},'
+                f' cmd_silence_timeout_s={self._cmd_silence_timeout})'
                 f' invert_yz={self.get_parameter("invert_cmd_vel_yz").value}'
                 f'{" [z-down 反号 ACTIVE]" if self.get_parameter("invert_cmd_vel_yz").value else ""}'
                 if self._enable_cmd_vel_relay else '\n  cmd_vel relay: DISABLED'
@@ -196,38 +252,93 @@ class OdomBridge(Node):
         )
 
     def _cmd_vel_relay_cb(self, msg: Twist):
-        """cmd_vel 中继回调：对 Nav2 输出施加加速度限幅后转发到 /cmd_vel_limiter
+        """cmd_vel 中继回调（帧流路径）：限幅后转发到 /cmd_vel_limiter
 
-        限幅范围与 nav2_mujoco.yaml 中 MPPI 的 ax_max/az_max 对齐：
-          max_ax=1.5 m/s²  (MPPI ax_max=1.5)
-          max_az=2.0 rad/s² (MPPI az_max=1.0，此处更宽松仅截断异常跳变)
+        本限幅器是链路唯一加速度权威（nav2 侧 MPPI 加速度死键已于 2026-11-08
+        删除，勿再按「与 MPPI 对齐」选参）：加速向对称夹 max_ax/max_ay/max_az，
+        减速向非对称夹 max_decel/max_decel_wz（P6a）。
 
         invert_cmd_vel_yz（真机 z-down 图设 true，实时可改，便于现场 A/B）：
           native 倒装图下 base_footprint z 物理朝下，nav2 的 +angular.z
           （绕下向 z 轴 CCW）= 物理右转，底盘标准约定 +wz = 左转 → 需取负；
           linear.y 同理（base ŷ=物理右、底盘 +y=左）；linear.x 不取负
           （mount −90 修正后 base x̂ = 机头）。取负在限幅之前（入口处先换到
-          底盘约定，限幅器全程工作在底盘口径）。
+          底盘约定，限幅器与 P6b 沉默 ramp 全程工作在底盘口径，出口不再过 invert）。
 
-        平滑归零只发生在零值消息仍持续流入时（正常到点收尾：MPPI 收尾递减，
-        限幅器跟帧平滑，约 0.33s @ 0.5→0 @1.5m/s²）。若输入沉默（上游
-        controller 崩溃），本中继是纯 pass-through、不合成零——最后一帧
-        被 AimRT 保持，这正是 nav_state_manager 看门狗存在的理由。
+        沉默语义（P6b，取代旧「纯 pass-through 不合成零」契约）：
+          帧流正常时平滑只随输入走（MPPI 收尾递减，限幅器跟帧）。输入沉默时
+          本回调不再被调用，由 _silence_timer_cb 接管（快车道/超时归零 ramp）；
+          本回调只同步沉默状态（_last_rx / _zero_flushed）。NSM 看门狗仍按
+          /cmd_vel_limiter 心跳与 3s/90s 规则兜底 bridge 自身死亡。
         """
         now_sec = self.get_clock().now().nanoseconds * 1e-9
+        self._last_rx = now_sec
+        self._zero_flushed = False
         vx_in, vy_in, wz_in = msg.linear.x, msg.linear.y, msg.angular.z
         if self.get_parameter('invert_cmd_vel_yz').value:
             vy_in, wz_in = -vy_in, -wz_in
         vx, vy, wz = self._rate_limiter.limit(vx_in, vy_in, wz_in, now_sec)
+        self._publish_limited(vx, vy, wz, src_msg=msg)
 
+    def _publish_limited(self, vx, vy, wz, src_msg=None):
+        """发布限幅后指令并记录 _last_published（沉默定时器「值不变不发布」用）。"""
         out = Twist()
         out.linear.x = vx
         out.linear.y = vy
-        out.linear.z = msg.linear.z   # passthrough (恒为 0)
-        out.angular.x = msg.angular.x  # passthrough (恒为 0)
-        out.angular.y = msg.angular.y  # passthrough (恒为 0)
+        out.linear.z = src_msg.linear.z if src_msg is not None else 0.0   # passthrough (恒为 0)
+        out.angular.x = src_msg.angular.x if src_msg is not None else 0.0  # passthrough (恒为 0)
+        out.angular.y = src_msg.angular.y if src_msg is not None else 0.0  # passthrough (恒为 0)
         out.angular.z = wz
         self._cmd_vel_pub.publish(out)
+        self._last_published = (float(vx), float(vy), float(wz))
+
+    def _silence_timer_cb(self):
+        """P6b 沉默期接管（20Hz 定时器；rclpy.spin 单线程与回调串行，无锁）。
+
+        帧流正常（now-_last_rx < SILENCE_MARGIN）时本函数只读不写、直接返回，
+        积分由 _cmd_vel_relay_cb 独占——不双积分。帧流沉默后：
+
+        - 末目标≈0（取消/门控停正常形状：零帧收尾）→ 快车道：立即向零续刹，
+          不等 T。落回 §4.1 数学（0.3→0 @0.6 = 0.5s / 7.5cm）；
+        - 末目标≠0（真崩溃形状：沉默时末命令=巡航全速）→ T 之前保沉默不发布
+          （AimRT 保末帧=原行为；NSM「末帧非零+沉默>3s→stand」backstop 原样
+          保留）；T 到 → 末目标强制归零，转 ramp 按 max_decel/max_decel_wz 衰减；
+        - 全分量 ≤0.01 → 补发 2 帧零、停发回沉默态（NSM「末帧零→90s」契约）；
+        - ramp 期间收到新 /cmd_vel → 回调路径从衰减态无缝续积分（加速夹板接管）；
+        - 值不变不发布，不污染 NSM 心跳语义。
+
+        ⚠️ ramp 发布衰减态直接出口、不再过 invert：invert_cmd_vel_yz 在入口
+        （_cmd_vel_relay_cb 限幅之前）已换到底盘口径，限幅器/ramp 全程底盘口径。
+        若日后把 invert 挪到出口，此处中间帧 vy/wz 会反号（P6 审核 §3 实现注记）。
+        """
+        if self._last_rx is None:
+            return
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if now - self._last_rx < SILENCE_MARGIN:
+            return  # 帧流正常：cb 负责，勿双积分
+
+        lim = self._rate_limiter
+        # F4 守卫：sim /clock 前跳最多当 0.1s 用，防前跳虚假放大单步衰减
+        dt = min(now - lim._last_time, SILENCE_DT_CAP)
+        if dt < 1e-6:
+            return
+        if any(abs(t) > 1e-3 for t in lim._tgt):
+            # 末目标非零 = 真崩溃形状：T 之前保沉默（AimRT 保末帧；NSM 3s backstop 原样）
+            if now - self._last_rx < self._cmd_silence_timeout:
+                return
+            lim._tgt = (0.0, 0.0, 0.0)  # T 到 → 目标强制归零，转 ramp（死人开关）
+            self._zero_flushed = False
+        # 末目标≈0：续刹快车道（不等 T）——取消/门控停落回 §4.1 数学
+        vx, vy, wz = lim._integrate(lim._tgt, dt, now)
+        if all(abs(v) <= 0.01 for v in (vx, vy, wz)):
+            if not self._zero_flushed:
+                # 收敛完成补 2 帧零回沉默（NSM「末帧零→90s」契约；AimRT 保帧=零）
+                self._publish_limited(0.0, 0.0, 0.0)
+                self._publish_limited(0.0, 0.0, 0.0)
+                self._zero_flushed = True
+            return
+        if self._last_published != (vx, vy, wz):
+            self._publish_limited(vx, vy, wz)  # 值不变不发布：不污染 NSM 心跳语义
 
     def odom_callback(self, msg: Odometry):
         """
@@ -237,7 +348,7 @@ class OdomBridge(Node):
 
         转换逻辑：
         T(odom->base_footprint) = T(camera_init->body) * T(body->base_footprint)
-        其中 T(body->base_footprint) 是纯 Z 轴平移 (-1.31m)
+        其中 T(body->base_footprint) 是纯 Z 轴平移 (body_to_footprint_z)
         """
         # 提取 FastLIO2 的位姿（camera_init 坐标系下 body 的位置）
         pos = msg.pose.pose.position
@@ -253,10 +364,12 @@ class OdomBridge(Node):
         # base_footprint 在 odom 坐标系下的位置
         footprint_x = pos.x + world_offset[0]
         footprint_y = pos.y + world_offset[1]
-        # footprint_z = pos.z + world_offset[2]
-        # 直接加 body_to_footprint_z(-1.31) 会让脚底板去到 Z=-1.31（地下）
-        # 减去 body_to_footprint_z（即 +1.31）将 odom 系的初始平面拉回地面 Z=0
-        footprint_z = pos.z + world_offset[2] - self.body_to_footprint_z
+        # footprint_z = body_z + body→footprint 偏移（z-up 仿真为负值，即向下落回地面）。
+        # 【2026-11-24 修复 z 锚悬空】删掉旧 cancel-hack「- self.body_to_footprint_z」：
+        # 该项与 world_offset[2] 精确抵消，把 base_footprint 钉死在 body(传感器)高度，
+        # 悬空 ≈传感器离地高（sim 实测 1.09m）。2D 导航零 z 消费者故全程潜伏；
+        # 归因/验收见 docs/nav/排查/TF树z锚悬空-cancel-hack-2026-11-24.md
+        footprint_z = pos.z + world_offset[2]
 
         # 使用当前仿真时间而非 FastLIO2 消息时间作为 TF 时间戳
         # FastLIO2 处理+传输有 ~20-30ms 延迟，若用 msg.header.stamp 会导致 Nav2 控制器

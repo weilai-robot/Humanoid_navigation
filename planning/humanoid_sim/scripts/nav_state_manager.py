@@ -10,16 +10,25 @@ nav_state_manager.py — 双足导航安全看门狗（纯看门狗，v0.3 改�
 两条触发线：
   ① action 终态：/navigate_to_pose/_action/status 到 SUCCEEDED/CANCELED/ABORTED
      （且机器人在 walk）→ stop_to_stand_s 后发 /stand_mode
-  ② 心跳沉默兜底：walk + nav_active 且心跳话题完全无消息超过
-     cmd_vel_timeout_s → 立即发 /stand_mode。覆盖 controller 崩溃 /
-     odom_bridge 中继死 / 链路断、action 永远无终态的场景——这是发目标
-     脚本罩不住的唯一刹车。心跳源 = 下游 /cmd_vel_limiter（odom_bridge
-     之后、AimRT 实际消费的流——controller 或 odom_bridge 任一死亡此
-     话题都断流；odom_bridge 死时 controller 照发 /cmd_vel 的"假健康"
-     只有盯下游才能识破）；本会话从未见过 limiter 消息（relay 未启用/
-     未接线）才回退 /cmd_vel。零值消息也算心跳：MPPI 等人期持续发零速
-     是正常态（P1 堵路等待语义），只有话题沉默才是链路死。阈值须 > BT
-     Wait 时长。
+  ② 心跳沉默兜底（P5 分级：按心跳源末帧值分两档，方案 §3.2-§3.4）：
+     walk + nav_active 且心跳话题沉默时：
+       末帧非零 + 沉默 > cmd_vel_timeout_s(3s) → 链路死（controller/
+         odom_bridge 崩溃，机器人带着末帧速度盲走）→ 立即 /stand_mode
+         （原行为不变）
+       末帧零   + 沉默 > zero_silence_backstop_s(90s) → 故意停超时兜底
+         → /stand_mode。P5 门控停车 = 取消 FollowPath → 一帧零速后流停
+         止，「零末帧+长沉默」是正常停等态——不豁免则门控等待第 ~3s 被
+         误 stand，而 stand 后无 auto-walk，任务僵死到 ABORT（C1/C2 必须
+         同批的原因）。90s 须 > 门控总耐心 ≈43-56s 并留余量——耦合 BT
+         外层(6)×内层(5) 现参数，调任一 retries/Wait 须重算
+     覆盖 controller 崩溃 / odom_bridge 中继死 / 链路断、action 永远无终态
+     的场景——这是发目标脚本罩不住的唯一刹车。心跳源 = 下游
+     /cmd_vel_limiter（odom_bridge 之后、AimRT 实际消费的流——controller
+     或 odom_bridge 任一死亡此话题都断流；odom_bridge 死时 controller 照发
+     /cmd_vel 的"假健康"只有盯下游才能识破）；本会话从未见过 limiter 消息
+     （relay 未启用/未接线）才回退 /cmd_vel。零值消息也算心跳：MPPI 等人
+     期持续发零速是正常态（P1 堵路等待语义），只有话题沉默才进入超时判定。
+     链路死档阈值须 > BT Wait 时长。
 
 模式事件（事件推断只看"topic 有消息"、忽略 data 数值——/walk_mode 真机
 发 0.0、/stand_mode 发 1.0、handoff 又写 0.0，三处口径不一，按 data 判必翻车）：
@@ -47,10 +56,23 @@ AimRT 内部 walk_stop_hold_sec_(1.0) 完成过渡保护。
 参数：
   auto_start         (bool,  default: false) 已废弃（纯看门狗无启动序列），
                                           传 true 只打 WARN，无效果
-  stop_to_stand_s    (float, default: 0.5)  终态触发后发 stand_mode 的延迟
+  stop_to_stand_s    (float, default: 3.0)  终态触发后发 stand_mode 的延迟
+                                        （0.5→1.5→3.0：到达后仰摔系列实证——
+                                        goal checker 不查速度，判成功时机器人
+                                        仍挪+缓降+前后摇晃时长随机（102124
+                                        ~1.8s、130205 >2.4s），1.5s 切 stand
+                                        仍在摇晃中、1.0s 后起后仰（130205）；
+                                        固定延迟=抽签，3s 再试，若仍摔=固定
+                                        延迟无解、须改停稳条件触发）
   stand_to_zero_s    (float, default: 2.0)  stand_mode 发出后等待稳定的时长
   cmd_vel_timeout_s  (float, default: 3.0)  心跳话题（/cmd_vel_limiter，
-                                          回退 /cmd_vel）沉默多久触发兜底
+                                          回退 /cmd_vel）末帧非零时沉默多久
+                                          触发兜底（链路死档）
+  zero_silence_backstop_s (float, default: 90.0)
+                                        心跳话题末帧零速时沉默多久触发兜底
+                                        （故意停档，P5 门控停等豁免 3s 规则；
+                                        须 > 门控总耐心 ≈43-56s，耦合 BT
+                                        外层(6)×内层(5) 现参数）
   no_cmd_vel_warn_s  (float, default: 6.0)  输入自检阈值：nav_active 却从未
                                           收到 cmd_vel 的告警线（须 >5s：
                                           正常启动窗口 ≈3.5s，防误报）
@@ -81,16 +103,24 @@ class NavStateManager(Node):
 
         # ── 参数 ──
         self.declare_parameter('auto_start',        False)
-        self.declare_parameter('stop_to_stand_s',   0.5)
+        # 0.5→1.5→3.0（2026-11-26）：到达后仰摔系列——102124(0.5s)/130205(1.5s)
+        # 两次都是 stand 后 ~1.0-1.3s 起后仰，且摇晃时长随机（130205 >2.4s）
+        # =固定延迟本质是抽签；3s 避开缓降全程+大部分摇晃，若仍摔须改停稳条件
+        self.declare_parameter('stop_to_stand_s',   3.0)
         self.declare_parameter('stand_to_zero_s',   2.0)
         self.declare_parameter('cmd_vel_timeout_s', 3.0)
         self.declare_parameter('no_cmd_vel_warn_s', 6.0)
+        # P5 分级零速档兜底（线②末帧零档）：须 > 门控总耐心 ≈43-56s
+        # （外层 RecoveryNode(6) × 内层 retries=5/Wait(1s)，方案 §3.4）。
+        # 耦合纪律：BT 外层(6)×内层(5) 任一 retries/Wait 调整都须重算本值
+        self.declare_parameter('zero_silence_backstop_s', 90.0)
 
         self._auto_start      = self.get_parameter('auto_start').value
         self._stop_to_stand   = self.get_parameter('stop_to_stand_s').value
         self._stand_to_zero   = self.get_parameter('stand_to_zero_s').value
         self._cmd_vel_timeout = self.get_parameter('cmd_vel_timeout_s').value
         self._warn_no_cmd_vel = self.get_parameter('no_cmd_vel_warn_s').value
+        self._zero_backstop   = self.get_parameter('zero_silence_backstop_s').value
 
         if self._auto_start:
             self.get_logger().warn(
@@ -104,6 +134,10 @@ class NavStateManager(Node):
         self._stop_in_flight     = False  # 停止序列进行中（re-arm 闸，防并发序列）
         self._last_cmd_vel_time  = None
         self._last_limiter_time  = None   # 下游 /cmd_vel_limiter 心跳（线②判据源）
+        # 线②末帧值分级（P5）：各心跳源最后一帧是否非零。与上面两个时间戳
+        # 一样只在 executor 线程读写，无锁访问安全
+        self._last_cmd_vel_nonzero  = False
+        self._last_limiter_nonzero  = False
         self._no_limiter_warned  = False  # "cmd_vel 活但 limiter 从未出现"告警锁存
         self._nav_active         = False
         self._nav_active_since   = None   # nav_active 上升沿时刻（输入自检用）
@@ -157,8 +191,9 @@ class NavStateManager(Node):
         self.get_logger().info(
             '[NavStateManager] 纯看门狗启动（单向 walk→stand，不做模式启动）\n'
             f'  终态→stand 延迟={self._stop_to_stand}s, stand 确认={self._stand_to_zero}s\n'
-            f'  心跳沉默超时={self._cmd_vel_timeout}s（源=/cmd_vel_limiter，'
-            '零值=心跳，沉默才算死）\n'
+            f'  心跳分级（源=/cmd_vel_limiter，P5）：末帧非零沉默>'
+            f'{self._cmd_vel_timeout}s=链路死 / 末帧零沉默>{self._zero_backstop}s'
+            '=故意停兜底（门控停等豁免 3s 规则）\n'
             f'  输入自检阈值={self._warn_no_cmd_vel}s'
         )
 
@@ -255,6 +290,8 @@ class NavStateManager(Node):
             abs(msg.linear.y)  > 0.01 or
             abs(msg.angular.z) > 0.01
         )
+        # P5 分级：记录 /cmd_vel 末帧值（零/非零都记，零速流也算有效末帧）
+        self._last_cmd_vel_nonzero = is_nonzero
         if is_nonzero:
             # 非零 → 兜底推断 walk + re-arm（DDS 发现晚丢 /walk_mode 事件
             # 时的替代入口）。与 _stop_sequence 收尾的置 False 竞争无害：
@@ -284,10 +321,15 @@ class NavStateManager(Node):
     def _cmd_vel_limiter_cb(self, msg: Twist):
         """下游心跳：/cmd_vel_limiter（odom_bridge 中继之后、AimRT 实际
         消费的流），线② 判据源——controller 或 odom_bridge 任一死亡，此
-        话题都断流。值不看（等待期零值=正常心跳）。与 _last_cmd_vel_time
-        一样只在 executor 线程写，无锁访问安全。
+        话题都断流。记时间戳 + 末帧值（零/非零，P5 分级用）。与
+        _last_cmd_vel_time 一样只在 executor 线程写，无锁访问安全。
         """
         self._last_limiter_time = time.monotonic()
+        self._last_limiter_nonzero = (
+            abs(msg.linear.x)  > 0.01 or
+            abs(msg.linear.y)  > 0.01 or
+            abs(msg.angular.z) > 0.01
+        )
 
     # ────────────────────────────────────────────────────────
     #  超时兜底（线②）+ 输入自检（1Hz）
@@ -307,9 +349,11 @@ class NavStateManager(Node):
             if self._last_limiter_time is not None:
                 last = self._last_limiter_time
                 limiter_seen = True
+                last_nonzero = self._last_limiter_nonzero
             else:
                 last = self._last_cmd_vel_time
                 limiter_seen = False
+                last_nonzero = self._last_cmd_vel_nonzero
             active_since = self._nav_active_since
             warned = self._no_cmd_vel_warned
             warned_limiter = self._no_limiter_warned
@@ -331,10 +375,22 @@ class NavStateManager(Node):
             return
 
         elapsed = now - last
-        if elapsed > self._cmd_vel_timeout:
+        # P5 分级（方案 §3.2）：末帧非零+沉默=链路死（立即停，原行为）；
+        # 末帧零+长沉默=故意停（门控等待/外层清图 Wait 期零速流停是正常态，
+        # 只在超 zero_silence_backstop_s 兜底站）——不分级则门控停车第 ~3s
+        # 被误 stand 且 stand 后无 auto-walk，任务僵死到 ABORT
+        if last_nonzero and elapsed > self._cmd_vel_timeout:
             source = '/cmd_vel_limiter' if limiter_seen else '/cmd_vel'
             self.get_logger().warn(
-                f'[NavStateManager] {source} 沉默 {elapsed:.1f}s，'
+                f'[NavStateManager] {source} 末帧非零后沉默 {elapsed:.1f}s，'
+                '判定链路死，触发安全停止（兜底）'
+            )
+            self._trigger_stop(delay=0.0)
+        elif not last_nonzero and elapsed > self._zero_backstop:
+            source = '/cmd_vel_limiter' if limiter_seen else '/cmd_vel'
+            self.get_logger().warn(
+                f'[NavStateManager] {source} 末帧零速后沉默 {elapsed:.1f}s '
+                f'（>{self._zero_backstop}s 兜底线）——故意停等待超时，'
                 '触发安全停止（兜底）'
             )
             self._trigger_stop(delay=0.0)
