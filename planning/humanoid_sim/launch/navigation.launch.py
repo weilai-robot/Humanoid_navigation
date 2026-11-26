@@ -53,12 +53,16 @@ def _setup(context, *args, **kwargs):
         )
     )
 
-    return LaunchDescription([
+    # OpaqueFunction 回调必须返回 list：Humble launch 的
+    # normalize_to_list_of_entities 不认 LaunchDescription（Iron 起才支持），
+    # 返回 LaunchDescription 会报 "'LaunchDescription' object is not iterable"
+    # 并让整个 launch 夭折（2026-11-26 服务器首启即现，tf_bridge/nav2 全没起来）。
+    return [
         tf_bridge_launch,
         # pc2scan_launch,
         nav2_launch,
         state_mgr_launch
-    ])
+    ]
 
 
 def generate_launch_description():
