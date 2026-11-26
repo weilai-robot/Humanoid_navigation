@@ -11,9 +11,9 @@ def generate_launch_description():
         # 保留参数只为兼容旧调用，传 true 节点侧只打 WARN
         # startup_delay_s / zero_hold_s / stand_hold_s 已删（启动序列无消费方）
         DeclareLaunchArgument('auto_start',        default_value='false'),
-        # stop_to_stand_s 0.5→1.5（2026-11-26）：102124 到达后仰摔=判成功时
-        # 机器人仍 ~0.2m/s 挪+缓降 ~1.9s 才归零，0.5s 切 stand=运动中过渡摔倒窗
-        DeclareLaunchArgument('stop_to_stand_s',   default_value='1.5'),
+        # stop_to_stand_s 0.5→1.5→3.0（2026-11-26）：到达后仰摔系列
+        # （102124/130205）——摇晃时长随机，固定延迟=抽签，3s 再试
+        DeclareLaunchArgument('stop_to_stand_s',   default_value='3.0'),
         DeclareLaunchArgument('stand_to_zero_s',   default_value='2.0'),
         DeclareLaunchArgument('cmd_vel_timeout_s', default_value='3.0'),
         # P5 分级零速档兜底（须 > 门控总耐心 ≈43-56s，耦合 BT 外层(6)×内层(5)）

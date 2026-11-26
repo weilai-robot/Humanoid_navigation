@@ -56,12 +56,14 @@ AimRT 内部 walk_stop_hold_sec_(1.0) 完成过渡保护。
 参数：
   auto_start         (bool,  default: false) 已废弃（纯看门狗无启动序列），
                                           传 true 只打 WARN，无效果
-  stop_to_stand_s    (float, default: 1.5)  终态触发后发 stand_mode 的延迟
-                                        （0.5→1.5：102124 到达后仰摔实证——
+  stop_to_stand_s    (float, default: 3.0)  终态触发后发 stand_mode 的延迟
+                                        （0.5→1.5→3.0：到达后仰摔系列实证——
                                         goal checker 不查速度，判成功时机器人
-                                        仍 ~0.2m/s 挪+死人开关 0.1m/s² 缓降
-                                        ~1.9s 才归零，0.5s 切 stand=运动中过渡
-                                        摔倒窗；1.5s 避开大部分缓降段）
+                                        仍挪+缓降+前后摇晃时长随机（102124
+                                        ~1.8s、130205 >2.4s），1.5s 切 stand
+                                        仍在摇晃中、1.0s 后起后仰（130205）；
+                                        固定延迟=抽签，3s 再试，若仍摔=固定
+                                        延迟无解、须改停稳条件触发）
   stand_to_zero_s    (float, default: 2.0)  stand_mode 发出后等待稳定的时长
   cmd_vel_timeout_s  (float, default: 3.0)  心跳话题（/cmd_vel_limiter，
                                           回退 /cmd_vel）末帧非零时沉默多久
@@ -101,9 +103,10 @@ class NavStateManager(Node):
 
         # ── 参数 ──
         self.declare_parameter('auto_start',        False)
-        # 0.5→1.5（2026-11-26）：102124 到达后仰摔=判成功时仍 ~0.2m/s 挪、
-        # 缓降 ~1.9s 才归零，0.5s 切 stand 落在运动中过渡摔倒窗内
-        self.declare_parameter('stop_to_stand_s',   1.5)
+        # 0.5→1.5→3.0（2026-11-26）：到达后仰摔系列——102124(0.5s)/130205(1.5s)
+        # 两次都是 stand 后 ~1.0-1.3s 起后仰，且摇晃时长随机（130205 >2.4s）
+        # =固定延迟本质是抽签；3s 避开缓降全程+大部分摇晃，若仍摔须改停稳条件
+        self.declare_parameter('stop_to_stand_s',   3.0)
         self.declare_parameter('stand_to_zero_s',   2.0)
         self.declare_parameter('cmd_vel_timeout_s', 3.0)
         self.declare_parameter('no_cmd_vel_warn_s', 6.0)
