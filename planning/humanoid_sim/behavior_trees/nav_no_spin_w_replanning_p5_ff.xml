@@ -22,9 +22,11 @@
   ⚠ 看门狗 zero_silence_backstop_s=90s 耦合重算：本文件外层(2)×内层(5)
      合法恢复最坏 ≈ 门控耐心 5.3s + 2×(清图~1s + w + 重规划~1.5s)
      ≈ 12s(w=1)/14s(w=2) << 90s，无假触发；90s 暂不改，A/B 后可收紧。
-  ⚠ 残留未等窗（诚实记录）：内层 ComputePathToPose Context 清图（1 次
-     重试）仍无 Wait——每外层轮先有 1 次未等重规划；若 A/B 仍见
-     toggle，下一档把内层 Context 也改 Sequence[清→Wait]。
+  ③ 内层 Context 清图也改 Sequence[清→Wait5] + 外层 RecoveryActions
+     Wait 1→5（2026-11-25 落地，即上版「残留未等窗」段预告的下一档）：
+     w5 批实证等待窗本身=亚稳暴露、主导 churn=内层无等待清图→幻影
+     路径→重启，堵死场景零幻影重启 ~1 票/goal；修复后首批 6/6 零摔
+     （postfix_batch1_1720）。
   ⚠ 内层 FollowPathGate 耐心 5×Wait(1s)+6 检查 ≈5.3s 为 C1 评审定参，
      本文件不动（调它须与外层 retries、90s backstop 三处联算，见
      nav_no_spin_w_replanning.xml 头注释互指）。
@@ -39,7 +41,10 @@
         <RateController hz="1.0">
           <RecoveryNode number_of_retries="1" name="ComputePathToPose">
             <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
-            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+            <Sequence name="ClearGlobalThenWait">
+              <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+              <Wait wait_duration="5"/>
+            </Sequence>
           </RecoveryNode>
         </RateController>
         <RecoveryNode number_of_retries="5" name="FollowPathGate">
@@ -57,7 +62,7 @@
         <Sequence name="RecoveryActions">
           <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
           <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
-          <Wait wait_duration="1"/>
+          <Wait wait_duration="5"/>
         </Sequence>
       </ReactiveFallback>
     </RecoveryNode>

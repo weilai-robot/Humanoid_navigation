@@ -41,7 +41,7 @@ bt_navigator:
     bt_loop_duration: 20
     default_server_timeout: 20
     # P1: 自定义 BT——与 nav2_real.yaml 同一份 xml（P1-堵路等待-BT改造方案.md C6'）
-    default_nav_to_pose_bt_xml: "$(find-pkg-share humanoid_sim)/behavior_trees/nav_no_spin_w_replanning.xml"
+    default_nav_to_pose_bt_xml: "$(find-pkg-share humanoid_sim)/behavior_trees/nav_no_spin_w_replanning_p5_ff.xml"
 
 # --- 控制器服务器 (MPPI) ---
 controller_server:
