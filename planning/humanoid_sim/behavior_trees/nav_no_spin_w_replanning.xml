@@ -2,11 +2,23 @@
   基于 Humble 默认 navigate_to_pose_w_replanning_and_recovery.xml 定制：
   恢复子树去掉 Spin / BackUp（双足失稳源），只留 ClearingActions + Wait。
   Wait 取 1s：外层恢复节拍期间 controller_server 停发 cmd_vel，看门狗线②
-  的心跳沉默超时是 3s（nav_state_manager cmd_vel_timeout_s），节拍 = Wait
-  + 重规划 + 派发 ≈ w+1.5~2s，w=2 会触看门狗（P1 方案 §4）。
+  分级后非零末帧档沉默超时仍是 3s（P5 线②分级：零末帧档走 90s 兜底），
+  节拍 = Wait + 重规划 + 派发 ≈ w+1.5~2s，w=2 会触看门狗（P1 方案 §4）。
   ClearEntireCostmap 全部保留：P2 ghost 障碍的兜底清道夫
   （docs/nav/改进TODO/README.md P2 裁决）。
-  落盘记录：P1-堵路等待-BT改造方案.md §3.1（2026-10-19 A 批 C1）。 -->
+  落盘记录：P1-堵路等待-BT改造方案.md §3.1（2026-10-19 A 批 C1）。
+  P5 遇堵先停门控（2026-11-17，方案 docs/nav/改进TODO/P5-遇堵先停-BT门控方案.md
+  §2.2）：内层 FollowPath 前加 IsPathValid 门控（RateController 限频 1Hz，
+  全局代价地图判死路径 → IsPathValid FAILURE → 取消 FollowPath 显式停车，
+  Wait(1s) 后门控复查，重规划有解即续走，耐心耗尽升级外层恢复）；内层
+  耐心 5×Wait(1s)+6 次检查 ≈5.3s（评审定参）。原 ClearLocalCostmap-Context
+  移除：控制器失败升级外层恢复（外层 ClearingActions 本就双图同清，
+  方案 §4.2 R4）。仿真/真机同指本文件，一次改动两侧生效。
+  ⚠️ 与看门狗 zero_silence_backstop_s=90s 耦合（90 依赖外层(6)×内层(5)
+  现参数，调任一 retries/Wait 须重算）；C1/C2 必须同批上线。
+  ⚠️ XML 不设 server_timeout 属性（BT.CPP 3.8.4 无 chrono 转换器，设即
+  树加载失败，方案 §2.5）；超时口径走 yaml bt_navigator default_server_timeout。
+-->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <RecoveryNode number_of_retries="6" name="NavigateRecovery">
@@ -17,9 +29,14 @@
             <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
           </RecoveryNode>
         </RateController>
-        <RecoveryNode number_of_retries="1" name="FollowPath">
-          <FollowPath path="{path}" controller_id="FollowPath"/>
-          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        <RecoveryNode number_of_retries="5" name="FollowPathGate">
+          <PipelineSequence name="PathGateAndFollowPath">
+            <RateController hz="1.0">
+              <IsPathValid path="{path}"/>
+            </RateController>
+            <FollowPath path="{path}" controller_id="FollowPath"/>
+          </PipelineSequence>
+          <Wait wait_duration="1"/>
         </RecoveryNode>
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
