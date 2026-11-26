@@ -1,0 +1,37 @@
+<!--
+  基于 Humble 默认 navigate_to_pose_w_replanning_and_recovery.xml 定制：
+  恢复子树去掉 Spin / BackUp（双足失稳源），只留 ClearingActions + Wait。
+  Wait 取 1s：外层恢复节拍期间 controller_server 停发 cmd_vel，看门狗线②
+  的心跳沉默超时是 3s（nav_state_manager cmd_vel_timeout_s），节拍 = Wait
+  + 重规划 + 派发 ≈ w+1.5~2s，w=2 会触看门狗（P1 方案 §4）。
+  ClearEntireCostmap 全部保留：P2 ghost 障碍的兜底清道夫
+  （docs/nav/改进TODO/README.md P2 裁决）。
+  落盘记录：P1-堵路等待-BT改造方案.md §3.1（2026-10-19 A 批 C1）。 -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="1" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <RoundRobin name="RecoveryActions">
+          <Sequence name="ClearingActions">
+            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          </Sequence>
+          <Wait wait_duration="1"/>
+        </RoundRobin>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

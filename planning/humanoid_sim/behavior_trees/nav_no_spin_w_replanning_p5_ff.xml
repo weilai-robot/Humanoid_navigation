@@ -1,0 +1,70 @@
+<!--
+  fail-fast 恢复变体（2026-11-23 设计拍板落地，依据
+  docs/nav/改进TODO/P6-过门后多次启停分析-20261121.md §5.4③″）：
+  基于 nav_no_spin_w_replanning.xml（dev-p5-gate，含 P5 IsPathValid 门控）
+  只改外层恢复，其余正文逐行同构。设计目标=有界恢复 + 快速诚实失败 +
+  消灭复走窗（用户拍板：持续堵死本就该尽快 Goal failed，清图↔复走反复
+  启停极其危险——11-19 实测 8 轮风暴 12 次 FollowPath 重接受 = 12 个
+  启停抽签窗）。
+  ① 外层 number_of_retries 6→2：持续堵死 ≈2 轮恢复后 Goal failed，
+     toggle 窗→0；瞬态幽灵仍有 2 次含等待的诚实重试。
+  ② RecoveryFallback RoundRobin[清双图|Wait] 交替 → Sequence[清双图→Wait]：
+     每轮恢复 = 清完先等 w 让传感器重标落地再重规划，规划诚实失败或
+     诚实绕行，关闭「清完未重标→假成功→复走 1-2s→又堵」窗口（环级
+     机制见同档 §5.4③′）。
+  ⚠ Wait 档位是 A/B 参数：本文件 w=1 主臂；w=2 臂 = 本文件单行改
+     wait_duration（runbook 记录，勿另立文件）。w 上限与看门狗耦合
+     分两态：无 P6b 栈：恢复节拍 ≈ w+1.5~2s < 线② 非零末帧档 3s →
+     w≤1（原约束，P1 方案 §4）；有 P6b 栈（本分支已并入 c2e2ee9）：
+     沉默 0.5s 由 odom_bridge P6b ramp 归零 → 末帧=0 → 线② 零末帧档
+     走 90s 兜底 → w≤2~3 不触看门狗（P6b 与线②分级互补，此即本文件
+     w 可放宽的前提；A/B 用 w=2 臂时以此注释为依据）。
+  ⚠ 看门狗 zero_silence_backstop_s=90s 耦合重算：本文件外层(2)×内层(5)
+     合法恢复最坏 ≈ 门控耐心 5.3s + 2×(清图~1s + w + 重规划~1.5s)
+     ≈ 12s(w=1)/14s(w=2) << 90s，无假触发；90s 暂不改，A/B 后可收紧。
+  ③ 内层 Context 清图也改 Sequence[清→Wait5] + 外层 RecoveryActions
+     Wait 1→5（2026-11-25 落地，即上版「残留未等窗」段预告的下一档）：
+     w5 批实证等待窗本身=亚稳暴露、主导 churn=内层无等待清图→幻影
+     路径→重启，堵死场景零幻影重启 ~1 票/goal；修复后首批 6/6 零摔
+     （postfix_batch1_1720）。
+  ⚠ 内层 FollowPathGate 耐心 5×Wait(1s)+6 检查 ≈5.3s 为 C1 评审定参，
+     本文件不动（调它须与外层 retries、90s backstop 三处联算，见
+     nav_no_spin_w_replanning.xml 头注释互指）。
+  节点清单与 nav_no_spin_w_replanning.xml 完全一致（Sequence/Wait/
+  ClearEntireCostmap/GoalUpdated 均为树内已有类型），无新节点加载风险；
+  P-0 式树加载冒烟留待 A/B 准备轮。
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="2" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="1" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <Sequence name="ClearGlobalThenWait">
+              <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+              <Wait wait_duration="5"/>
+            </Sequence>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="5" name="FollowPathGate">
+          <PipelineSequence name="PathGateAndFollowPath">
+            <RateController hz="1.0">
+              <IsPathValid path="{path}"/>
+            </RateController>
+            <FollowPath path="{path}" controller_id="FollowPath"/>
+          </PipelineSequence>
+          <Wait wait_duration="1"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <ReactiveFallback name="RecoveryFallback">
+        <GoalUpdated/>
+        <Sequence name="RecoveryActions">
+          <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
+          <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+          <Wait wait_duration="5"/>
+        </Sequence>
+      </ReactiveFallback>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

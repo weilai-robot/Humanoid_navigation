@@ -1,17 +1,21 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
-def generate_launch_description():
+# 地图/参数默认沿用既有 sim 场景 (mujoco_lab); real2sim P2 起 run_mujoco_nav_real.sh
+# 传 map_yaml:=robot_lab_20261030.yaml —— sim nav2 与真机同用一张 GIMP 2D 图。
+
+
+def _setup(context, *args, **kwargs):
     pkg_humanoid = get_package_share_directory('humanoid_sim')
     pkg_nav2 = get_package_share_directory('nav2_bringup')
 
     # 指向刚才保存的地图和新建的参数文件
-    map_file = os.path.join(pkg_humanoid, 'maps', 'mujoco_lab.yaml')  # f1_test1 school_room school_room2
-    params_file = os.path.join(pkg_humanoid, 'config', 'nav2_mujoco.yaml')
+    map_file = os.path.join(pkg_humanoid, 'maps', LaunchConfiguration('map_yaml').perform(context))
+    params_file = os.path.join(pkg_humanoid, 'config', LaunchConfiguration('params_yaml').perform(context))
 
     # ====== 1. 包含 tf_bridge (发布 odom 和 map->camera_init 静态 TF) ======
     tf_bridge_launch = IncludeLaunchDescription(
@@ -40,8 +44,32 @@ def generate_launch_description():
         }.items()
     )
 
-    return LaunchDescription([
+    # ====== 4. 导航终态自动切 stand (真机同款 nav_state_manager) ======
+    # 到达/取消/失败任一终态 -> 延 0.5s 发 /stand_mode (5Hz x 2s);
+    # 只发 stand, 从不主动发 cmd_vel=0; 下次 send_nav_goal.sh 会自动切回 walk
+    state_mgr_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(pkg_humanoid, 'launch', 'nav_state_manager.launch.py')
+        )
+    )
+
+    # OpaqueFunction 回调必须返回 list：Humble launch 的
+    # normalize_to_list_of_entities 不认 LaunchDescription（Iron 起才支持），
+    # 返回 LaunchDescription 会报 "'LaunchDescription' object is not iterable"
+    # 并让整个 launch 夭折（2026-11-26 服务器首启即现，tf_bridge/nav2 全没起来）。
+    return [
         tf_bridge_launch,
         # pc2scan_launch,
-        nav2_launch
+        nav2_launch,
+        state_mgr_launch
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('map_yaml', default_value='mujoco_lab.yaml',
+                              description='maps/ 下的 2D 地图 yaml 文件名'),
+        DeclareLaunchArgument('params_yaml', default_value='nav2_mujoco.yaml',
+                              description='config/ 下的 nav2 参数文件名'),
+        OpaqueFunction(function=_setup),
     ])
